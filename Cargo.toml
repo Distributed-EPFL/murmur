@@ -1,0 +1,26 @@
+[package]
+name = "murmur"
+version = "0.1.0"
+authors = ["Ogier Bouvier <ars3nic@ars3nic.ch>"]
+edition = "2018"
+license = "AGPL-3"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+drop = { git = "https://github.com/Distributed-EPFL/drop", branch = "feature/refactor", features = [ "system" ] }
+tokio = { version = "0.2", features = [ "sync" ] }
+snafu = "0.6"
+serde = "1.0"
+tracing = "0.1"
+tracing-futures = "0.2"
+futures = "0.3"
+lazy_static = { version = "1.4", optional = true } 
+
+[dev-dependencies]
+drop = { git = "https://github.com/Distributed-EPFL/drop", branch = "feature/refactor", features = [ "test" ] }
+lazy_static = "1.4"
+
+[features]
+default = []
+test = [ "drop/test", "lazy_static" ]
