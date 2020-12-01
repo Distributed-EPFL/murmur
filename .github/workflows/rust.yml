@@ -1,10 +1,10 @@
 on: [push, pull_request]
 
-name: Murmur continuous integration
+name: Murmur
 
 jobs:
   check:
-    name: cargo check
+    name: continuous integration
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -36,6 +36,7 @@ jobs:
           command: test
 
       - name: install kcov
+        shell: bash
         run: |
           wget https://github.com/SimonKagstrom/kcov/archive/master.tar.gz &&
           tar xzf master.tar.gz &&
@@ -46,14 +47,10 @@ jobs:
           make &&
           make install DESTDIR=../../kcov-build
 
-      - uses: actions-rs/cargo@v1
-        name: install cargo kcov
-        with:
-          command: install cargo-kcov
-
-      - uses: actions-rs/cargo@v1
-        name: run coverage
-        with:
-          command: kcov
-      - uses: codecov/codecov-actions@v1
-        name: upload coverage
+      - name: upload coverage
+        shell: bash
+        run: |
+          rm -rf kcov-master &&
+          for file in target/debug/deps/murmur-*; do [ -x "${file}" ] || continue; mkdir -p "target/cov/$(basename $file)"; ./kcov-build/usr/local/bin/kcov --exclude-pattern=/.cargo,/usr/lib --verify "target/cov/$(basename $file)" "$file"; done &&
+          bash <(curl -s https://codecov.io/bash) &&
+          echo "Uploaded code coverage"
