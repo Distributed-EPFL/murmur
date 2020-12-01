@@ -1,0 +1,59 @@
+on: [push, pull_request]
+
+name: Murmur continuous integration
+
+jobs:
+  check:
+    name: cargo check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        rust: [ stable, beta, nightly ]
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+    steps:
+      - uses: actions/checkout@v2
+
+      - uses: actions-rs/toolchain@v1
+        name: install toolchain
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+
+      - uses: actions-rs/cargo@v1
+        name: cargo check
+        with:
+          command: check
+
+      - uses: actions-rs/cargo@v1
+        name: cargo clippy
+        with:
+          command: clippy
+          args: -- -D warnings
+
+      - uses: actions-rs/cargo@v1
+        name: cargo test
+        with:
+          command: test
+
+      - name: install kcov
+        run: |
+          wget https://github.com/SimonKagstrom/kcov/archive/master.tar.gz &&
+          tar xzf master.tar.gz &&
+          cd kcov-master &&
+          mkdir build &&
+          cd build &&
+          cmake .. &&
+          make &&
+          make install DESTDIR=../../kcov-build
+
+      - uses: actions-rs/cargo@v1
+        name: install cargo kcov
+        with:
+          command: install cargo-kcov
+
+      - uses: actions-rs/cargo@v1
+        name: run coverage
+        with:
+          command: kcov
+      - uses: codecov/codecov-actions@v1
+        name: upload coverage
