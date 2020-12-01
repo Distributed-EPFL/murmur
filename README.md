@@ -1,7 +1,7 @@
 Murmur probabilistic broadcast algorithm
 ========================================
 
-[![Build Status](https://travis-ci.com/Distributed-EPFL/murmur.svg?branch=master)](https://travis-ci.com/Distributed-EPFL/murmur)
+![Murmur](https://github.com/Distributed-EPFL/murmur/workflows/Murmur/badge.svg?branch=master)
 [![codecov](https://codecov.io/gh/Distributed-EPFL/murmur/branch/main/graph/badge.svg?token=SP377AFYTS)](https://codecov.io/gh/Distributed-EPFL/murmur)
 
 This is an implementation of the Murmur probabilistic broadcast algorithm in Rust. You can find theoretical details
