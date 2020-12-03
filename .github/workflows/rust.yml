@@ -53,7 +53,7 @@ jobs:
           command: test
 
       - name: install kcov
-        uses: ryankurte/acton-apt@v0.2.0
+        uses: ryankurte/action-apt@v0.2.0
         with:
           packages: "kcov"
 
