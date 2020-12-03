@@ -45,7 +45,7 @@ jobs:
         name: install toolchain
         with:
           profile: minimal
-          toolchain: ${{ matrix.rust }}
+          toolchain: stable
 
       - uses: actions-rs/cargo@v1
         name: cargo check
