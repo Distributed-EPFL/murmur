@@ -1,10 +1,10 @@
 on: [push, pull_request]
 
-name: Murmur
+name: CI
 
 jobs:
   check:
-    name: continuous integration
+    name: unit tests
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -47,10 +47,10 @@ jobs:
           make &&
           make install DESTDIR=../../kcov-build || exit 0
 
-      - name: upload coverage
+      - name: generate coverage report
         shell: bash
         run: |
-          rm -rf kcov-master &&
-          for file in target/debug/deps/murmur-*; do [ -x "${file}" ] || continue; mkdir -p "target/cov/$(basename $file)"; ./kcov-build/usr/local/bin/kcov --exclude-pattern=/.cargo,/usr/lib --verify "target/cov/$(basename $file)" "$file"; done &&
-          bash <(curl -s https://codecov.io/bash) &&
-          echo "Uploaded code coverage" || exit 0
+          for file in target/debug/deps/murmur-*; do [ -x "${file}" ] || continue; mkdir -p "target/cov/$(basename $file)"; ./kcov-build/usr/local/bin/kcov --exclude-pattern=/.cargo,/usr/lib --verify "target/cov/$(basename $file)" "$file"; done
+
+      - name: upload coverage
+        uses: codecov/codecov-action@v1
