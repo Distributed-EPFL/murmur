@@ -35,7 +35,11 @@ jobs:
         with:
           command: test
 
-      - name: install kcov
+  coverage:
+    name: coverage testing
+    runs-on: ubuntu-latest
+    steps:
+      - name: generate kcov report
         shell: bash
         run: |
           wget https://github.com/SimonKagstrom/kcov/archive/master.tar.gz &&
@@ -45,11 +49,7 @@ jobs:
           cd build &&
           cmake .. &&
           make &&
-          make install DESTDIR=../../kcov-build  && cd ../.. || exit 0
-
-      - name: generate coverage report
-        shell: bash
-        run: |
+          make install DESTDIR=../../kcov-build  && cd ../.. &&
           for file in target/debug/deps/murmur-*; do [ -x "${file}" ] || continue; mkdir -p "target/cov/$(basename $file)"; ./kcov-build/usr/local/bin/kcov --exclude-pattern=/.cargo,/usr/lib --verify "target/cov/$(basename $file)" "$file"; done
 
       - name: upload coverage
