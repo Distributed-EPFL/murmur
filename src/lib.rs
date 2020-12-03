@@ -6,3 +6,6 @@
 
 /// Implementation of the classic murmur, without batching and other optimisations
 pub mod classic;
+
+/// Implemenation of mrumur that provides batching, latency and other optimisations
+pub mod batched;
