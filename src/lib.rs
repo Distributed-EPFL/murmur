@@ -4,6 +4,5 @@
 //! gossip on top of the `drop` crate. <br />
 //! See `drop` documentation for more details on how to use `Murmur`.
 
-
-mod classic;
-pub use classic::{Murmur, MurmurError, MurmurHandle, MurmurMessage, MurmurProcessingError};
+/// Implementation of the classic murmur, without batching and other optimisations
+pub mod classic;
