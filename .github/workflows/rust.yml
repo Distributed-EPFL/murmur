@@ -45,7 +45,7 @@ jobs:
           cd build &&
           cmake .. &&
           make &&
-          make install DESTDIR=../../kcov-build || exit 0
+          make install DESTDIR=../../kcov-build  && cd ../.. || exit 0
 
       - name: generate coverage report
         shell: bash
