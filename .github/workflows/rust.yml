@@ -37,7 +37,7 @@ jobs:
 
   coverage:
     name: coverage testing
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v2
 
@@ -48,26 +48,18 @@ jobs:
           toolchain: stable
 
       - uses: actions-rs/cargo@v1
-        name: cargo check
-        with:
-          command: check
-
-      - uses: actions-rs/cargo@v1
-        name: cargo clippy
-        with:
-          command: clippy
-          args: -- -D warnings
-
-      - uses: actions-rs/cargo@v1
         name: cargo test
         with:
           command: test
 
+      - name: install kcov
+        uses: ryankurte/acton-apt@v0.2.0
+        with:
+          packages: "kcov"
+
       - name: generate kcov report
         shell: bash
         run: |
-          sudo apt update &&
-          sudo apt install -y kcov &&
           for file in target/debug/deps/murmur-*; do [ -x "${file}" ] || continue; mkdir -p "target/cov/$(basename $file)"; kcov --exclude-pattern=/.cargo,/usr/lib --verify "target/cov/$(basename $file)" "$file"; done
 
       - name: upload coverage
