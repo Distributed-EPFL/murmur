@@ -702,9 +702,9 @@ pub mod test {
     }
 
     /// Generate a sequence of `Pull` messages for the entirety of the provided `Batch`
-    pub fn generate_pull<'a, M>(
-        batch: &'a Batch<M>,
-    ) -> impl Iterator<Item = Arc<BatchedMurmurMessage<M>>> + 'a
+    pub fn generate_pull<M>(
+        batch: &Batch<M>,
+    ) -> impl Iterator<Item = Arc<BatchedMurmurMessage<M>>> + '_
     where
         M: Message,
     {
