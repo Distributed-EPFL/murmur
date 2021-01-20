@@ -96,8 +96,10 @@ impl<M: Message + 'static> Murmur<M> {
 }
 
 #[async_trait]
-impl<M: Message + 'static, S: Sender<MurmurMessage<M>> + 'static> Processor<MurmurMessage<M>, M, S>
-    for Murmur<M>
+impl<M, S> Processor<MurmurMessage<M>, M, M, S> for Murmur<M>
+where
+    M: Message + 'static,
+    S: Sender<MurmurMessage<M>> + 'static,
 {
     type Handle = MurmurHandle<M>;
 

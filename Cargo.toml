@@ -20,6 +20,7 @@ lazy_static = { version = "1.4", optional = true }
 [dev-dependencies]
 drop = { git = "https://github.com/Distributed-EPFL/drop", branch = "feature/refactor", features = [ "test" ] }
 lazy_static = "1.4"
+snafu = { version = "0.6", features = [ "backtraces" ] }
 
 [features]
 default = []
