@@ -9,7 +9,7 @@ license = "AGPL-3"
 
 [dependencies]
 drop = { git = "https://github.com/Distributed-EPFL/drop", branch = "feature/refactor", features = [ "system" ] }
-tokio = { version = "0.2", features = [ "sync" ] }
+tokio = { version = "1", features = [ "sync", "time" ] }
 snafu = "0.6"
 serde = "1.0"
 tracing = "0.1"

@@ -624,13 +624,7 @@ where
     }
 
     fn try_deliver(&mut self) -> Result<Option<O>, Self::Error> {
-        use mpsc::error::TryRecvError;
-
-        match self.receiver.try_recv() {
-            Err(TryRecvError::Closed) => Channel.fail(),
-            Err(TryRecvError::Empty) => Ok(None),
-            Ok(message) => Ok(Some(message)),
-        }
+        todo!()
     }
 
     async fn broadcast(&mut self, message: &I) -> Result<(), Self::Error> {

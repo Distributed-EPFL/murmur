@@ -233,7 +233,7 @@ pub mod test {
         (0..peer_count).map(move |_| MurmurMessage::Gossip(message.clone(), signature))
     }
 
-    #[tokio::test(threaded_scheduler)]
+    #[tokio::test]
     async fn delivery() {
         lazy_static! {
             static ref KEYPAIR: RwLock<Option<KeyPair>> = RwLock::new(None);
