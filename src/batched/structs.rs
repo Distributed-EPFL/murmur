@@ -183,6 +183,15 @@ where
     }
 }
 
+impl<M> fmt::Display for Batch<M>
+where
+    M: Message,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.info.digest())
+    }
+}
+
 #[message]
 /// A `Block` is a set of messages that are part of the same `Batch`
 pub struct Block<M: Message> {

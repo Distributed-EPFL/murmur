@@ -21,7 +21,8 @@ lazy_static = { version = "1.4", optional = true }
 drop = { git = "https://github.com/Distributed-EPFL/drop", branch = "feature/refactor", features = [ "test" ] }
 lazy_static = "1.4"
 snafu = { version = "0.6", features = [ "backtraces" ] }
+tokio = { version = "1", features = [ "rt-multi-thread" ] }
 
 [features]
 default = []
-test = [ "drop/test", "lazy_static" ]
+test = [ "drop/test", "lazy_static", "tokio/rt-multi-thread" ]

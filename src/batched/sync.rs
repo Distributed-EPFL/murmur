@@ -1,7 +1,9 @@
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::mem;
 use std::ops::DerefMut;
+use std::sync::Arc;
 use std::time::Instant;
 
 use super::{Batch, BatchInfo, Block, BlockId, Sequence};
@@ -211,7 +213,7 @@ impl<M: Message + 'static> BatchState<M> {
     }
 
     /// Returns the map of blocks of this `BatchState`
-    async fn blocks(&self) -> RwLockReadGuard<'_, BTreeMap<Sequence, Block<M>>> {
+    pub async fn blocks(&self) -> RwLockReadGuard<'_, BTreeMap<Sequence, Block<M>>> {
         RwLockReadGuard::map(self.state.read().await, |state| match state {
             State::Pending(blocks, _) => blocks,
             State::Complete { blocks } => blocks,
@@ -244,6 +246,29 @@ impl<M: Message + 'static> BatchState<M> {
         *self.state.write().await = State::Complete { blocks };
 
         Ok(())
+    }
+}
+
+impl<M> fmt::Debug for BatchState<M>
+where
+    M: Message,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self.info)
+    }
+}
+
+impl<M> fmt::Display for BatchState<M>
+where
+    M: Message,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{} with {} blocks",
+            self.info.digest(),
+            self.info.sequence()
+        )
     }
 }
 
@@ -313,6 +338,46 @@ impl<M: Message> Default for State<M> {
         Self::Pending(Default::default(), Default::default())
     }
 }
+
+#[derive(Clone, Debug)]
+/// Shared reference to a complete `Batch`
+pub struct BatchRef<M>
+where
+    M: Message,
+{
+    state: Arc<BatchState<M>>,
+}
+
+impl<M> From<Arc<BatchState<M>>> for BatchRef<M>
+where
+    M: Message,
+{
+    fn from(state: Arc<BatchState<M>>) -> Self {
+        Self { state }
+    }
+}
+
+impl<M> std::ops::Deref for BatchRef<M>
+where
+    M: Message,
+{
+    type Target = BatchState<M>;
+
+    fn deref(&self) -> &Self::Target {
+        self.state.deref()
+    }
+}
+
+impl<M> PartialEq for BatchRef<M>
+where
+    M: Message,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.info == other.info
+    }
+}
+
+impl<M> Eq for BatchRef<M> where M: Message {}
 
 #[cfg(any(test, feature = "test"))]
 pub mod test {
