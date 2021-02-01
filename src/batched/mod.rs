@@ -53,8 +53,8 @@ mod rdv;
 pub use rdv::*;
 
 mod structs;
-pub use structs::{Batch, Payload};
-pub(self) use structs::{BatchInfo, Block, BlockId, Sponge};
+pub use structs::{Batch, BatchInfo, Payload};
+pub(self) use structs::{Block, BlockId, Sponge};
 
 mod sync;
 #[cfg(any(feature = "test", test))]
