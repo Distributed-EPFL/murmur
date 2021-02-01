@@ -59,7 +59,8 @@ pub(self) use structs::{Block, BlockId, Sponge};
 mod sync;
 #[cfg(any(feature = "test", test))]
 pub use sync::test::*;
-use sync::{BatchRef, BatchState};
+pub use sync::BatchRef;
+use sync::BatchState;
 
 #[derive(Debug, Snafu)]
 /// Errors encountered by `BatchedMurmurHandle` when delivering or broadcasting
