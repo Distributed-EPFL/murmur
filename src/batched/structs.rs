@@ -284,6 +284,11 @@ impl<M> Payload<M> {
         }
     }
 
+    /// Get the origin of this `Payload`
+    pub fn sender(&self) -> &sign::PublicKey {
+        &self.sender
+    }
+
     /// Get the `Signature` for this `Payload`
     pub fn signature(&self) -> &Signature {
         &self.signature
