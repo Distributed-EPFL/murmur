@@ -227,6 +227,11 @@ impl<M: Message> Block<M> {
     pub fn len(&self) -> Sequence {
         self.payloads.len() as u32
     }
+
+    /// Get an `Iterator` of the `Payloads` in this `Block`
+    pub fn iter(&self) -> impl Iterator<Item = &Payload<M>> {
+        self.payloads.iter()
+    }
 }
 
 impl<M: Message> PartialOrd for Block<M> {
