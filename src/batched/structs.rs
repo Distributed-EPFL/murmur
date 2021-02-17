@@ -137,11 +137,11 @@ impl<M: Message> std::ops::Index<Sequence> for Batch<M> {
     fn index(&self, sequence: Sequence) -> &Self::Output {
         let mut len = 0;
 
-        for block in self.blocks.iter().map(|(_, b)| b) {
+        for block in self.blocks.values() {
             len += block.len();
 
             if len > sequence {
-                return &block[sequence - len];
+                return &block[len - sequence];
             }
         }
 
