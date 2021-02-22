@@ -8,7 +8,9 @@
 //! [`Batch`]: crate::batched::Batch
 //! [`rdvPolicy`]: crate::batched::RdvPolicy
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::iter;
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -23,8 +25,7 @@ use drop::crypto::sign::{KeyPair, SignError, Signer, VerifyError};
 use drop::system::manager::Handle;
 use drop::system::{message, Message, Processor, Sampler, Sender, SenderError};
 
-use futures::future::{FutureExt, OptionFuture};
-use futures::TryFutureExt;
+use futures::future::OptionFuture;
 
 use serde::{Deserialize, Serialize};
 
@@ -163,13 +164,13 @@ pub enum BatchedMurmurMessage<M: Message> {
 /// the same instance
 pub struct BatchedMurmur<M: Message, R: RdvPolicy> {
     keypair: KeyPair,
-    batches: RwLock<HashMap<Digest, Arc<BatchState<M>>>>,
+    batches: RwLock<HashMap<Digest, State<M>>>,
 
     rendezvous: Arc<R>,
     sponge: Mutex<Sponge<M>>,
     sponge_threshold: usize,
 
-    delivery: Mutex<Option<mpsc::Sender<BatchRef<M>>>>,
+    delivery: Mutex<Option<mpsc::Sender<Arc<Batch<M>>>>>,
 
     gossip: RwLock<HashSet<PublicKey>>,
 }
@@ -213,16 +214,24 @@ where
             .context(Network)
     }
 
+    async fn is_delivered(&self, digest: &Digest) -> bool {
+        self.batches
+            .read()
+            .await
+            .get(digest)
+            .map(|x| x.is_complete())
+            .unwrap_or(false)
+    }
+
     /// Get a `Block` from a specified `Batch`. The `Block` can be either a
     /// completed and delivered `Block` or a `Block` in a pending `Batch`
     async fn get_block(&self, id: &BlockId) -> Option<Block<M>> {
         OptionFuture::from(
-            self.manager_by_digest(id.digest())
+            self.batches
+                .read()
                 .await
-                .map(|manager| async move {
-                    debug!("checking for block {:?}", id);
-                    manager.get(&id).await
-                }),
+                .get(id.digest())
+                .map(|x| x.get_block(id.sequence())),
         )
         .await
         .flatten()
@@ -231,7 +240,7 @@ where
     /// Insert a block into this `Incomplete` batch. Returns `true` if the `Batch` can still be completed after
     /// even if this `Block` is incorrect somehow
     async fn insert_block(&self, id: BlockId, block: Block<M>) -> bool {
-        if let Some(manager) = self.manager_by_digest(id.digest()).await {
+        if let Some(manager) = self.pending_by_digest(id.digest()).await {
             manager
                 .insert(block)
                 .await
@@ -241,23 +250,31 @@ where
         }
     }
 
-    async fn check_complete(&self, batch: &Digest) -> bool {
-        trace!("checking batch {} for completion", batch);
-        OptionFuture::from(self.batches.read().await.get(batch).map(|batch| {
-            batch.check().then(move |need| async move {
-                if need.map_or_else(|e| e.valid(), |_| true) {
-                    batch.complete().map_ok_or_else(|_| false, |_| true).await
+    async fn try_deliver(
+        &self,
+        digest: &Digest,
+    ) -> Result<Option<Arc<Batch<M>>>, BatchProcessingError> {
+        let mut guard = self.batches.write().await;
+
+        match guard.entry(*digest) {
+            Entry::Vacant(_) => Ok(None),
+            Entry::Occupied(mut e) => {
+                if let Some(batch) = e.get_mut().ready().await {
+                    Ok(Some(batch))
                 } else {
-                    false
+                    Ok(None)
                 }
-            })
-        }))
-        .await
-        .unwrap_or(false)
+            }
+        }
     }
 
-    async fn manager_by_digest(&self, digest: &Digest) -> Option<Arc<BatchState<M>>> {
-        self.batches.read().await.get(digest).map(Clone::clone)
+    async fn pending_by_digest(&self, digest: &Digest) -> Option<Arc<BatchState<M>>> {
+        self.batches
+            .read()
+            .await
+            .get(digest)
+            .map(|x| x.to_pending())
+            .flatten()
     }
 
     async fn batchinfo(&self, blockid: &BlockId) -> Option<BatchInfo> {
@@ -265,10 +282,10 @@ where
             .read()
             .await
             .get(blockid.digest())
-            .map(|batch| batch.info())
+            .map(|batch| *batch.info())
     }
 
-    async fn get_manager_or_insert(&self, info: BatchInfo) -> Arc<BatchState<M>> {
+    async fn get_manager_or_insert(&self, info: BatchInfo) -> Option<Arc<BatchState<M>>> {
         debug!("updating batch state for {}", info.digest());
 
         self.batches
@@ -277,21 +294,17 @@ where
             .entry(*info.digest())
             .or_insert_with(|| {
                 debug!("new batch {} registered", info.digest());
-                Arc::new(BatchState::new(info, self.keypair.clone()))
+                Arc::new(BatchState::new(info, self.keypair.clone())).into()
             })
-            .clone()
+            .to_pending()
     }
 
     async fn insert_batch(&self, batch: Batch<M>) {
-        let digest = *batch.info().digest();
-        let state = BatchState::new_completed(batch, self.keypair.clone());
-
-        debug!(
-            "registering new local complete batch with digest {}",
-            digest,
-        );
-
-        self.batches.write().await.insert(digest, Arc::new(state));
+        self.batches
+            .write()
+            .await
+            .entry(*batch.info().digest())
+            .or_insert_with(|| Arc::new(batch).into());
     }
 
     async fn advertise<S>(
@@ -328,38 +341,43 @@ where
         I: Iterator<Item = Sequence>,
         S: Sender<BatchedMurmurMessage<M>>,
     {
-        let manager = self.get_manager_or_insert(info).await;
+        if let Some(manager) = self.get_manager_or_insert(info).await {
+            // TODO: handle timeout and failure to retrieve a `Block`
 
-        // TODO: handle timeout and failure to retrieve a `Block`
+            debug!(
+                "pulling missing blocks for batch {} from {}",
+                info.digest(),
+                from
+            );
 
-        debug!(
-            "pulling missing blocks for batch {} from {}",
-            info.digest(),
-            from
-        );
+            for sequence in available {
+                if let Ok(true) = manager.request(sequence, from).await {
+                    debug!(
+                        "outgoing request for block {} of batch {} from {}",
+                        sequence,
+                        info.digest(),
+                        from
+                    );
 
-        for sequence in available {
-            if let Ok(true) = manager.request(sequence, from).await {
-                debug!(
-                    "outgoing request for block {} of batch {} from {}",
-                    sequence,
-                    info.digest(),
-                    from
-                );
-
-                let blockid = BlockId::new(*info.digest(), sequence);
-                let message = BatchedMurmurMessage::Pull(blockid);
-                sender
-                    .send(Arc::new(message), &from)
-                    .await
-                    .context(Network)?;
-            } else {
-                debug!(
-                    "already pending request for block {} of batch {}",
-                    sequence,
-                    info.digest()
-                );
+                    let blockid = BlockId::new(*info.digest(), sequence);
+                    let message = BatchedMurmurMessage::Pull(blockid);
+                    sender
+                        .send(Arc::new(message), &from)
+                        .await
+                        .context(Network)?;
+                } else {
+                    debug!(
+                        "already pending request for block {} of batch {}",
+                        sequence,
+                        info.digest()
+                    );
+                }
             }
+        } else {
+            debug!(
+                "no need to  pull blocks for complete batch {}",
+                info.digest()
+            );
         }
 
         Ok(())
@@ -367,13 +385,13 @@ where
 }
 
 #[async_trait]
-impl<M, S, R> Processor<BatchedMurmurMessage<M>, M, BatchRef<M>, S> for BatchedMurmur<M, R>
+impl<M, S, R> Processor<BatchedMurmurMessage<M>, M, Arc<Batch<M>>, S> for BatchedMurmur<M, R>
 where
     M: Message + 'static,
     R: RdvPolicy,
     S: Sender<BatchedMurmurMessage<M>> + 'static,
 {
-    type Handle = BatchedHandle<M, BatchRef<M>, S, R>;
+    type Handle = BatchedHandle<M, Arc<Batch<M>>, S, R>;
 
     type Error = BatchProcessingError;
 
@@ -441,6 +459,10 @@ where
             }
 
             BatchedMurmurMessage::Transmit(info, sequence, block) => {
+                if self.is_delivered(info.digest()).await {
+                    return Ok(());
+                }
+
                 block.verify(&self.keypair).context(InvalidBlock { from })?;
 
                 debug!(
@@ -459,11 +481,9 @@ where
                         info.digest()
                     );
 
-                    if self.check_complete(info.digest()).await {
+                    if let Some(batch) = self.try_deliver(info.digest()).await? {
                         debug!("batch {} is complete", info.digest());
                         self.announce(*info, true, sender).await?;
-
-                        let bref = self.get_manager_or_insert(*info).await;
 
                         if let Err(e) = self
                             .delivery
@@ -471,7 +491,7 @@ where
                             .await
                             .as_mut()
                             .context(Setup)?
-                            .send(bref.into())
+                            .send(batch)
                             .await
                         {
                             error!("handle was dropped early: {}", e);
@@ -539,8 +559,8 @@ where
                             batch.info().digest(),
                             from
                         );
-                        let available = batch.available().await;
-                        let message = BatchedMurmurMessage::Announce(batch.info(), available);
+                        let available = batch.available();
+                        let message = BatchedMurmurMessage::Announce(*batch.info(), available);
 
                         sender
                             .send(Arc::new(message), &from)
@@ -561,7 +581,7 @@ where
             .await
             .expect("sampling failed");
 
-        trace!(
+        debug!(
             "initial sampling finished with {} remote peers",
             sample.len()
         );
@@ -581,7 +601,7 @@ where
             debug!("initial announcement of {}", batch);
 
             if let Err(e) = self
-                .announce(batch.info(), batch.available().await, sender.clone())
+                .announce(*batch.info(), batch.available(), sender.clone())
                 .await
             {
                 error!("failed announcing batch:{}", e);
@@ -687,6 +707,104 @@ where
                 .send(Arc::new(message), peer)
                 .await
                 .context(Broadcast),
+        }
+    }
+}
+
+#[derive(Clone)]
+enum State<M: Message> {
+    Complete(Arc<Batch<M>>),
+    Pending(Arc<BatchState<M>>),
+}
+
+impl<M> State<M>
+where
+    M: Message + 'static,
+{
+    fn is_complete(&self) -> bool {
+        !self.is_pending()
+    }
+
+    fn is_pending(&self) -> bool {
+        matches!(self, Self::Pending(_))
+    }
+
+    fn info(&self) -> &BatchInfo {
+        match self {
+            Self::Complete(batch) => batch.info(),
+            Self::Pending(batch) => batch.info(),
+        }
+    }
+
+    async fn get_block(&self, seq: Sequence) -> Option<Block<M>> {
+        match self {
+            Self::Pending(state) => state.get_sequence(seq).await,
+            Self::Complete(batch) => batch.get(seq),
+        }
+    }
+
+    /// Check if this is ready to transition from pending to complete
+    /// # Returns
+    /// `Some` containing the complete batch if ready, `None` otherwise
+    async fn ready(&mut self) -> Option<Arc<Batch<M>>> {
+        match self {
+            Self::Pending(state) => {
+                if state.complete().await.is_ok() {
+                    if let Ok(batch) = state.to_batch().await {
+                        let batch = Arc::new(batch);
+                        *self = Self::Complete(batch.clone());
+                        Some(batch)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            Self::Complete(batch) => Some(batch.clone()),
+        }
+    }
+
+    /// Get this `Batch`'s state as a pending state if possible
+    fn to_pending(&self) -> Option<Arc<BatchState<M>>> {
+        if let Self::Pending(state) = self {
+            Some(state.clone())
+        } else {
+            None
+        }
+    }
+
+    fn available(&self) -> bool {
+        self.is_complete()
+    }
+}
+
+impl<M> From<Arc<BatchState<M>>> for State<M>
+where
+    M: Message + 'static,
+{
+    fn from(state: Arc<BatchState<M>>) -> Self {
+        Self::Pending(state)
+    }
+}
+
+impl<M> From<Arc<Batch<M>>> for State<M>
+where
+    M: Message + 'static,
+{
+    fn from(batch: Arc<Batch<M>>) -> Self {
+        Self::Complete(batch)
+    }
+}
+
+impl<M> fmt::Display for State<M>
+where
+    M: Message + 'static,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Pending(batch) => write!(f, "pending batch {}", batch.info().digest()),
+            Self::Complete(batch) => write!(f, "complete batch {}", batch.info().digest()),
         }
     }
 }
@@ -905,9 +1023,11 @@ pub mod test {
         let (murmur, sender) = run(murmur, messages, keys).await;
 
         murmur
-            .manager_by_digest(info.digest())
+            .batches
+            .read()
             .await
-            .expect("no registered batch");
+            .get(info.digest())
+            .expect("no complete batch registered");
 
         let outgoing = sender.messages().await;
 
@@ -1048,13 +1168,52 @@ pub mod test {
 
         let mut handle = manager.run(murmur).await;
 
-        let recv: BatchRef<u32> = handle.deliver().await.expect("deliver failed");
+        let recv: Arc<Batch<u32>> = handle.deliver().await.expect("deliver failed");
 
-        assert_eq!(recv.info(), info, "delivered batch has different metadata");
+        assert_eq!(recv.info(), &info, "delivered batch has different metadata");
 
         recv.blocks()
-            .await
-            .values()
             .for_each(|block| block.verify(&keypair).expect("invalid block"));
+    }
+
+    #[tokio::test]
+    async fn deliver_then_announce() {
+        use super::sync::test::generate_batch;
+
+        use drop::system::sampler::AllSampler;
+        use drop::test::keyset;
+
+        drop::test::init_logger();
+
+        let public = keyset(1).next().unwrap();
+        let sender = Arc::new(CollectingSender::new(iter::once(public)));
+        let sampler = Arc::new(AllSampler::default());
+        let batch = generate_batch(1);
+        let mut murmur = BatchedMurmur::new(KeyPair::random(), Fixed::new_local());
+        let announce = BatchedMurmurMessage::Announce(*batch.info(), true);
+        let messages = iter::once(announce.clone())
+            .chain(generate_transmit(batch))
+            .chain(iter::once(announce))
+            .map(Arc::new);
+        let mut handle = murmur.output(sampler, sender.clone()).await;
+
+        let murmur = Arc::new(murmur);
+
+        futures::future::join_all(
+            iter::repeat(murmur.clone())
+                .zip(messages)
+                .map(|(murmur, message)| murmur.process(message, public, sender.clone())),
+        )
+        .await;
+
+        handle.deliver().await.expect("delivery failed");
+
+        let batches = murmur.batches.read().await;
+
+        assert_eq!(batches.len(), 1, "batch was unregistered after delivery");
+        assert!(
+            batches.values().all(State::is_complete),
+            "batch was not set as complete"
+        );
     }
 }

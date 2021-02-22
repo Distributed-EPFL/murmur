@@ -82,11 +82,10 @@ impl fmt::Display for BatchInfo {
     }
 }
 
-#[message]
 /// A batch of blocks that is being broadcasted
+#[derive(Clone)]
 pub struct Batch<M: Message> {
     info: BatchInfo,
-    #[serde(bound(deserialize = "M: Message"))]
     blocks: BTreeMap<Sequence, Block<M>>,
 }
 
@@ -125,8 +124,14 @@ impl<M: Message> Batch<M> {
         !self.blocks.values().any(|b| b.len() > 0)
     }
 
+    /// Get a `Block` from this `Batch` using its `Sequence`
+    pub fn get(&self, sequence: Sequence) -> Option<Block<M>> {
+        self.blocks.get(&sequence).map(Clone::clone)
+    }
+
     /// Convert this `Batch` into an `Iterator` of its `Block`s
     pub fn into_blocks(self) -> impl Iterator<Item = Block<M>> {
+        // FIXME: pending stablization of `BTreeMap::into_values`
         self.blocks.into_iter().map(|(_, v)| v)
     }
 }
@@ -180,6 +185,17 @@ where
         let info = BatchInfo::new(len, digest);
 
         Self::new(info, blocks)
+    }
+}
+
+impl<M> From<(BatchInfo, BTreeMap<Sequence, Block<M>>)> for Batch<M>
+where
+    M: Message,
+{
+    fn from(v: (BatchInfo, BTreeMap<Sequence, Block<M>>)) -> Self {
+        let (info, blocks) = v;
+
+        Self { info, blocks }
     }
 }
 

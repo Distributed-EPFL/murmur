@@ -43,7 +43,10 @@ pub enum BlockError {
 impl BlockError {
     /// Check whether it is worth continuing with this `BatchState`
     pub fn valid(&self) -> bool {
-        !matches!(self, Self::BadHash | Self::HashFail { .. } | Self::BadSignature { .. })
+        !matches!(
+            self,
+            Self::BadHash | Self::HashFail { .. } | Self::BadSignature { .. }
+        )
     }
 }
 
@@ -95,8 +98,8 @@ impl<M: Message + 'static> BatchState<M> {
     }
 
     /// Get the information of this `Batch`
-    pub fn info(&self) -> BatchInfo {
-        self.info
+    pub fn info(&self) -> &BatchInfo {
+        &self.info
     }
 
     /// Register a new `Block` for this `Batch`. This also removes any pending block requests
@@ -220,8 +223,9 @@ impl<M: Message + 'static> BatchState<M> {
         })
     }
 
+    /// Returns if this `BatchState` is complete<
     pub async fn available(&self) -> bool {
-        matches!(*self.state.read().await, State::Complete{..})
+        matches!(*self.state.read().await, State::Complete { .. })
     }
 
     /// Convert this `BatchState` in a complete `Batch` if it is possible in the current state.
@@ -246,6 +250,19 @@ impl<M: Message + 'static> BatchState<M> {
         *self.state.write().await = State::Complete { blocks };
 
         Ok(())
+    }
+
+    /// Turn this `BatchState` in an immutable `Batch`
+    pub async fn to_batch(&self) -> Result<Batch<M>, BlockError> {
+        match *self.state.write().await {
+            State::Complete { ref mut blocks } => {
+                let blocks = std::mem::take(blocks);
+                let batch = (self.info, blocks).into();
+
+                Ok(batch)
+            }
+            State::Pending { .. } => NotReady.fail(),
+        }
     }
 }
 
@@ -304,7 +321,8 @@ where
         if let State::Pending(ref mut blocks, ..) = *self.lock {
             blocks
         } else {
-            panic!("")
+            // BlockWriteGuard shouldn't be created from a complete batch
+            unreachable!()
         }
     }
 }
