@@ -11,7 +11,6 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::iter;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -50,6 +49,9 @@ pub static MAX_RETRIES: usize = 3;
 /// Type for sequence numbers of a `Block`
 pub type Sequence = u32;
 
+mod provider;
+use provider::ProviderHandle;
+
 mod rdv;
 pub use rdv::*;
 
@@ -60,7 +62,6 @@ pub(self) use structs::{Block, BlockId, Sponge};
 mod sync;
 #[cfg(any(feature = "test", test))]
 pub use sync::test::*;
-pub use sync::BatchRef;
 use sync::BatchState;
 
 #[derive(Debug, Snafu)]
@@ -166,6 +167,8 @@ pub struct BatchedMurmur<M: Message, R: RdvPolicy> {
     keypair: KeyPair,
     batches: RwLock<HashMap<Digest, State<M>>>,
 
+    providers: ProviderHandle,
+
     rendezvous: Arc<R>,
     sponge: Mutex<Sponge<M>>,
     sponge_threshold: usize,
@@ -190,6 +193,7 @@ where
             gossip: Default::default(),
             sponge: Default::default(),
             delivery: Default::default(),
+            providers: Default::default(),
         }
     }
 
@@ -285,20 +289,6 @@ where
             .map(|batch| *batch.info())
     }
 
-    async fn get_manager_or_insert(&self, info: BatchInfo) -> Option<Arc<BatchState<M>>> {
-        debug!("updating batch state for {}", info.digest());
-
-        self.batches
-            .write()
-            .await
-            .entry(*info.digest())
-            .or_insert_with(|| {
-                debug!("new batch {} registered", info.digest());
-                Arc::new(BatchState::new(info, self.keypair.clone())).into()
-            })
-            .to_pending()
-    }
-
     async fn insert_batch(&self, batch: Batch<M>) {
         self.batches
             .write()
@@ -330,54 +320,41 @@ where
             .context(Network)
     }
 
-    async fn pull_missing_blocks<I, S>(
+    async fn pull_missing_blocks<S>(
         &self,
         info: BatchInfo,
-        available: I,
+        available: impl Iterator<Item = Sequence>,
         from: PublicKey,
         sender: Arc<S>,
     ) -> Result<(), BatchProcessingError>
     where
-        I: Iterator<Item = Sequence>,
         S: Sender<BatchedMurmurMessage<M>>,
     {
-        if let Some(manager) = self.get_manager_or_insert(info).await {
-            // TODO: handle timeout and failure to retrieve a `Block`
+        if self.is_delivered(info.digest()).await {
+            debug!("already delivered {}, not requesting blocks", info);
+            return Ok(());
+        }
 
-            debug!(
-                "pulling missing blocks for batch {} from {}",
-                info.digest(),
-                from
-            );
+        self.batches
+            .write()
+            .await
+            .entry(*info.digest())
+            .or_insert_with(|| State::Pending(Arc::new(BatchState::new(info))));
 
-            for sequence in available {
-                if let Ok(true) = manager.request(sequence, from).await {
-                    debug!(
-                        "outgoing request for block {} of batch {} from {}",
-                        sequence,
-                        info.digest(),
-                        from
-                    );
+        for sequence in available {
+            let id = BlockId::new(*info.digest(), sequence);
 
-                    let blockid = BlockId::new(*info.digest(), sequence);
-                    let message = BatchedMurmurMessage::Pull(blockid);
-                    sender
-                        .send(Arc::new(message), &from)
-                        .await
-                        .context(Network)?;
-                } else {
-                    debug!(
-                        "already pending request for block {} of batch {}",
-                        sequence,
-                        info.digest()
-                    );
-                }
+            self.providers.register_provider(id, from).await;
+
+            if let Some(provider) = self.providers.best_provider(id).await {
+                let message = Arc::new(BatchedMurmurMessage::Pull(id));
+
+                debug!("pulling {} from {}", id, from);
+
+                sender.send(message, &provider).await.context(Network)?;
+            } else {
+                debug!("not pulling {}, already pending request", id);
             }
-        } else {
-            debug!(
-                "no need to  pull blocks for complete batch {}",
-                info.digest()
-            );
         }
 
         Ok(())
@@ -405,9 +382,6 @@ where
             BatchedMurmurMessage::Announce(info, has) => {
                 if *has {
                     self.pull_missing_blocks(*info, (0..info.sequence()), from, sender)
-                        .await?;
-                } else {
-                    self.pull_missing_blocks(*info, iter::empty(), from, sender)
                         .await?;
                 }
             }
@@ -460,8 +434,13 @@ where
 
             BatchedMurmurMessage::Transmit(info, sequence, block) => {
                 if self.is_delivered(info.digest()).await {
+                    debug!("late transmit for block {} of {}", sequence, info);
                     return Ok(());
                 }
+
+                let blockid = BlockId::new(*info.digest(), *sequence);
+
+                self.providers.register_response(blockid, from).await;
 
                 block.verify(&self.keypair).context(InvalidBlock { from })?;
 
@@ -471,8 +450,6 @@ where
                     info.digest(),
                     from
                 );
-
-                let blockid = BlockId::new(*info.digest(), *sequence);
 
                 if self.insert_block(blockid, block.clone()).await {
                     trace!(
@@ -484,6 +461,8 @@ where
                     if let Some(batch) = self.try_deliver(info.digest()).await? {
                         debug!("batch {} is complete", info.digest());
                         self.announce(*info, true, sender).await?;
+
+                        self.providers.purge(*info).await;
 
                         if let Err(e) = self
                             .delivery
@@ -1064,11 +1043,15 @@ pub mod test {
             let pulls = messages
                 .iter()
                 .filter(
-                    |msg| matches!(msg.1.deref(), &BatchedMurmurMessage::Pull(id)if blockid == id),
+                    |msg| matches!(msg.1.deref(), &BatchedMurmurMessage::Pull(id) if blockid == id),
                 )
                 .count();
 
-            assert_eq!(pulls, 1, "block pulled more than once without timeout");
+            assert_eq!(
+                pulls, 1,
+                "{} pulled more than once without timeout",
+                blockid
+            );
         }
 
         messages

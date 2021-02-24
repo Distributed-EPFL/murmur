@@ -1,7 +1,10 @@
+use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use drop::async_trait;
 use drop::crypto::key::exchange::PublicKey;
+
+use snafu::Snafu;
 
 /// Batch creation configuration enum.
 #[derive(Copy, Clone, Debug)]
@@ -29,7 +32,7 @@ impl RdvConfig {
 
 #[async_trait]
 /// A trait encapsulating a policy for picking Rendezvous point for batch construction
-pub trait RdvPolicy: Send + Sync {
+pub trait RdvPolicy: Send + Sync + FromStr {
     /// Pick a new rendezvous node
     async fn pick(&self) -> RdvConfig;
 }
@@ -62,6 +65,26 @@ impl RdvPolicy for Fixed {
     }
 }
 
+impl FromStr for Fixed {
+    type Err = FixedParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        todo!("parse {} into a fixed policy", s)
+    }
+}
+
+#[derive(Debug, Snafu)]
+/// Parse error encountered when parsing a `Fixed` `RdvPolicy`
+pub struct FixedParseError(FixedParseErrorInner);
+
+#[derive(Debug, Snafu)]
+enum FixedParseErrorInner {
+    #[snafu(display("badly formatted policy"))]
+    BadFmt,
+    #[snafu(display("error parsing key"))]
+    KeyParse,
+}
+
 /// A `RdvPolicy` that uses round-robin to decide which batcher to use
 pub struct RoundRobin {
     last: AtomicUsize,
@@ -87,5 +110,13 @@ impl RdvPolicy for RoundRobin {
             .unwrap();
 
         RdvConfig::Remote { peer: *peer }
+    }
+}
+
+impl FromStr for RoundRobin {
+    type Err = FixedParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        todo!("parse  {} into a round robin policy", s)
     }
 }

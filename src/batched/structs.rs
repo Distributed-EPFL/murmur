@@ -46,6 +46,12 @@ impl Ord for BlockId {
     }
 }
 
+impl fmt::Display for BlockId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "block {} of batch {}", self.sequence, self.digest)
+    }
+}
+
 /// Information about a `Batch`
 #[message]
 #[derive(Copy)]
@@ -111,12 +117,17 @@ impl<M: Message> Batch<M> {
         self.blocks.iter().map(|(_, b)| b)
     }
 
-    /// Get the length of this `Batch`
+    /// Get the length of this `Batch` in number of `Payload`s
     pub fn len(&self) -> Sequence {
         self.blocks
             .iter()
             .map(|(_, b)| b)
             .fold(0, |acc, x| acc + x.len())
+    }
+
+    /// Get an ``Iterator` to the `Payload`s in this `Batch`
+    pub fn iter(&self) -> impl Iterator<Item = &Payload<M>> {
+        self.blocks.values().map(|x| x.iter()).flatten()
     }
 
     /// Check if this `Batch` is empty
@@ -162,9 +173,7 @@ impl<M: Message + 'static> IntoIterator for Batch<M> {
     fn into_iter(self) -> Self::IntoIter {
         let init: Box<dyn Iterator<Item = Payload<M>>> = Box::new(iter::empty());
 
-        self.blocks
-            .into_iter()
-            .map(|(_, b)| b)
+        self.into_blocks()
             .fold(init, |acc, curr| Box::new(acc.chain(curr)))
     }
 }
