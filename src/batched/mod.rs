@@ -173,7 +173,7 @@ pub struct BatchedMurmur<M: Message, R: RdvPolicy> {
     sponge: Mutex<Sponge<M>>,
     sponge_threshold: usize,
 
-    delivery: Mutex<Option<mpsc::Sender<Arc<Batch<M>>>>>,
+    delivery: Option<mpsc::Sender<Arc<Batch<M>>>>,
 
     gossip: RwLock<HashSet<PublicKey>>,
 }
@@ -464,15 +464,7 @@ where
 
                         self.providers.purge(*info).await;
 
-                        if let Err(e) = self
-                            .delivery
-                            .lock()
-                            .await
-                            .as_mut()
-                            .context(Setup)?
-                            .send(batch)
-                            .await
-                        {
+                        if let Err(e) = self.delivery.as_ref().context(Setup)?.send(batch).await {
                             error!("handle was dropped early: {}", e);
                         }
                     } else {
@@ -589,7 +581,7 @@ where
 
         let (deliver_tx, deliver_rx) = mpsc::channel(16);
 
-        self.delivery.lock().await.replace(deliver_tx);
+        self.delivery.replace(deliver_tx);
 
         BatchedHandle::new(
             self.keypair.clone(),
