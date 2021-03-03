@@ -1,8 +1,8 @@
-//! This module provides an optimized implementation of [`Murmur`] using batching and bittorrent-like distribution of
+//! <p> This module provides an optimized implementation of [`Murmur`] using batching and bittorrent-like distribution of
 //! [`Batch`]es. Batch creation involves payload collecting node (rendezvous nodes) that are reponsible for collating all
-//! payloads into a [`Batch`] before disseminating the [`Batch`] throughout the network.
+//! payloads into a [`Batch`] before disseminating the [`Batch`] throughout the network.</p>
 //!
-//! Different rendez vous policy are supported using the [`RdvPolicy`] trait.
+//! <p>Different rendez vous policy are supported using the [`RdvPolicy`] trait.</p>
 //!
 //! [`Murmur`]: crate::classic::Murmur
 //! [`Batch`]: crate::batched::Batch
@@ -32,22 +32,13 @@ use snafu::{OptionExt, ResultExt, Snafu};
 
 use tokio::sync::{mpsc, Mutex, RwLock};
 
-use tracing::{debug, error, trace, warn};
-
-/// Default buffering at `Batch` creation
-pub static DEFAULT_SPONGE_THRESHOLD: usize = 8194 * 2;
-
-/// Default size for blocks
-pub static DEFAULT_BLOCK_SIZE: usize = 1024;
-
-/// Default timeout for block re-request
-pub static DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// Maximum number of retries for failed requests
-pub static MAX_RETRIES: usize = 3;
+use tracing::{debug, error, info, trace, warn};
 
 /// Type for sequence numbers of a `Block`
 pub type Sequence = u32;
+
+mod config;
+pub use config::BatchedMurmurConfig;
 
 mod provider;
 use provider::ProviderHandle;
@@ -171,9 +162,10 @@ pub struct BatchedMurmur<M: Message, R: RdvPolicy> {
 
     rendezvous: Arc<R>,
     sponge: Mutex<Sponge<M>>,
-    sponge_threshold: usize,
 
     delivery: Option<mpsc::Sender<Arc<Batch<M>>>>,
+
+    config: BatchedMurmurConfig,
 
     gossip: RwLock<HashSet<PublicKey>>,
 }
@@ -184,10 +176,10 @@ where
     R: RdvPolicy,
 {
     /// Create a new `BatchedMurmur`
-    pub fn new(keypair: KeyPair, rendezvous: R) -> Self {
+    pub fn new(keypair: KeyPair, rendezvous: R, config: BatchedMurmurConfig) -> Self {
         Self {
             keypair,
-            sponge_threshold: DEFAULT_SPONGE_THRESHOLD,
+            config,
             rendezvous: Arc::new(rendezvous),
             batches: Default::default(),
             gossip: Default::default(),
@@ -459,12 +451,13 @@ where
                     );
 
                     if let Some(batch) = self.try_deliver(info.digest()).await? {
-                        debug!("batch {} is complete", info.digest());
+                        info!("batch {} is complete", info.digest());
                         self.announce(*info, true, sender).await?;
 
                         self.providers.purge(*info).await;
 
                         if let Err(e) = self.delivery.as_ref().context(Setup)?.send(batch).await {
+                            // FIXME: stop processing messages altogether since we can't deliver anything
                             error!("handle was dropped early: {}", e);
                         }
                     } else {
@@ -480,19 +473,19 @@ where
 
                 let mut sponge = self.sponge.lock().await;
 
-                debug!(
+                trace!(
                     "collecting payload from {}, batch completion {}/{}",
                     from,
                     sponge.len(),
-                    self.sponge_threshold
+                    self.config.sponge_threshold()
                 );
 
                 sponge.insert(payload.clone());
 
-                if sponge.len() >= self.sponge_threshold {
-                    trace!("sponge threshold reached, creating batch...");
+                if sponge.len() >= self.config.sponge_threshold() {
+                    debug!("sponge threshold reached, creating batch...");
 
-                    let batch = sponge.drain_to_batch(DEFAULT_BLOCK_SIZE);
+                    let batch = sponge.drain_to_batch(self.config.block_size());
                     let info = *batch.info();
 
                     self.insert_batch(batch).await;
@@ -548,7 +541,7 @@ where
     async fn output<SA: Sampler>(&mut self, sampler: Arc<SA>, sender: Arc<S>) -> Self::Handle {
         let keys = sender.keys().await;
         let sample = sampler
-            .sample(keys.iter().copied(), 0)
+            .sample(keys.iter().copied(), self.config.gossip_size())
             .await
             .expect("sampling failed");
 
@@ -588,6 +581,19 @@ where
             self.rendezvous.clone(),
             deliver_rx,
             sender,
+        )
+    }
+}
+
+impl<M> Default for BatchedMurmur<M, Fixed>
+where
+    M: Message + 'static,
+{
+    fn default() -> Self {
+        Self::new(
+            KeyPair::random(),
+            Fixed::new_local(),
+            BatchedMurmurConfig::default(),
         )
     }
 }
@@ -791,8 +797,15 @@ pub mod test {
     use drop::system::sampler::AllSampler;
     use drop::system::sender::CollectingSender;
 
+    use lazy_static::lazy_static;
+
     #[allow(dead_code)]
-    static SIZE: usize = DEFAULT_BLOCK_SIZE * 10;
+    lazy_static! {
+        static ref SIZE: usize = BatchedMurmurConfig::default().block_size() * 10;
+        static ref DEFAULT_SPONGE_THRESHOLD: usize =
+            BatchedMurmurConfig::default().sponge_threshold();
+        static ref DEFAULT_BLOCK_SIZE: usize = BatchedMurmurConfig::default().block_size();
+    }
 
     fn generate_sequence<M, F>(
         count: usize,
@@ -913,17 +926,15 @@ pub mod test {
     async fn sponge_insertion() {
         use drop::test::keyset;
 
-        let policy = Fixed::new_local();
-        let keypair = KeyPair::random();
         let peers = keyset(50);
-        let murmur = BatchedMurmur::new(keypair.clone(), policy);
-        let payloads = generate_collect(SIZE, |x| x);
+        let murmur = BatchedMurmur::default();
+        let payloads = generate_collect(*SIZE, |x| x);
 
         let (murmur, _) = run(murmur, payloads, peers).await;
 
         assert_eq!(
             murmur.sponge.lock().await.len(),
-            SIZE,
+            *SIZE,
             "wrong number of message in sponge"
         );
 
@@ -931,13 +942,15 @@ pub mod test {
             .sponge
             .lock()
             .await
-            .drain_to_batch(DEFAULT_BLOCK_SIZE);
+            .drain_to_batch(*DEFAULT_BLOCK_SIZE);
 
         assert_eq!(
             batch.len() as usize,
-            SIZE,
+            *SIZE,
             "wrong number of payloads in batch"
         );
+
+        let keypair = KeyPair::random();
 
         batch
             .blocks()
@@ -950,10 +963,10 @@ pub mod test {
 
         drop::test::init_logger();
 
-        let keypair = KeyPair::random();
-        let murmur = BatchedMurmur::new(keypair.clone(), Fixed::new_local());
+        let config = BatchedMurmurConfig::default();
+        let murmur = BatchedMurmur::default();
         let peers = keyset(50);
-        let payloads = generate_collect(DEFAULT_SPONGE_THRESHOLD + 1, |x| x * 2);
+        let payloads = generate_collect(config.sponge_threshold() + 1, |x| x * 2);
 
         let (murmur, sender) = run(murmur, payloads, peers).await;
 
@@ -973,7 +986,7 @@ pub mod test {
             })
             .expect("did not announce batch");
 
-        assert_eq!(announce.size(), DEFAULT_SPONGE_THRESHOLD);
+        assert_eq!(announce.size(), *DEFAULT_SPONGE_THRESHOLD);
     }
 
     #[tokio::test]
@@ -984,12 +997,12 @@ pub mod test {
 
         drop::test::init_logger();
 
-        let batch = generate_batch(SIZE / DEFAULT_BLOCK_SIZE);
+        let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
         let info = *batch.info();
         let announce = BatchedMurmurMessage::Announce(*batch.info(), true);
         let messages = iter::once(announce).chain(generate_transmit(batch));
-        let keys: Vec<_> = keyset(SIZE / 100).collect();
-        let murmur = BatchedMurmur::new(KeyPair::random(), Fixed::new_local());
+        let keys: Vec<_> = keyset(*SIZE / 100).collect();
+        let murmur = BatchedMurmur::default();
 
         let (murmur, sender) = run(murmur, messages, keys).await;
 
@@ -1017,16 +1030,16 @@ pub mod test {
 
         drop::test::init_logger();
 
-        let peer_count = SIZE / 100;
+        let peer_count = *SIZE / 100;
 
-        let batch = generate_batch(SIZE / DEFAULT_BLOCK_SIZE);
+        let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
         let info = *batch.info();
         let announce = BatchedMurmurMessage::Announce(*batch.info(), true);
         let messages = iter::repeat(announce.clone())
             .take(peer_count)
             .chain(generate_transmit(batch));
         let keys: Vec<_> = keyset(peer_count).collect();
-        let murmur = BatchedMurmur::new(KeyPair::random(), Fixed::new_local());
+        let murmur = BatchedMurmur::default();
 
         let (_, sender) = run(murmur, messages, keys).await;
         let messages = sender.messages().await;
@@ -1060,11 +1073,11 @@ pub mod test {
 
         drop::test::init_logger();
 
-        let batch = generate_batch(SIZE / DEFAULT_BLOCK_SIZE);
+        let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
         let info = *batch.info();
         let pulls = generate_pull(&batch);
-        let murmur = BatchedMurmur::new(KeyPair::random(), Fixed::new_local());
-        let keys: Vec<_> = keyset(SIZE / 100).collect();
+        let murmur = BatchedMurmur::default();
+        let keys: Vec<_> = keyset(*SIZE / 100).collect();
 
         murmur.insert_batch(batch.clone()).await;
 
@@ -1088,11 +1101,10 @@ pub mod test {
         use drop::test::keyset;
 
         static SUBSCRIBERS: usize = 10;
-
         drop::test::init_logger();
 
-        let batch = generate_batch(SIZE / DEFAULT_BLOCK_SIZE);
-        let murmur = BatchedMurmur::new(KeyPair::random(), Fixed::new_local());
+        let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
+        let murmur = BatchedMurmur::default();
         let keys: Vec<_> = keyset(50).collect();
 
         murmur.insert_batch(batch).await;
@@ -1132,9 +1144,9 @@ pub mod test {
         drop::test::init_logger();
 
         let keypair = KeyPair::random();
-        let batch = generate_batch(SIZE / DEFAULT_BLOCK_SIZE);
+        let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
         let info = *batch.info();
-        let murmur = BatchedMurmur::new(keypair.clone(), Fixed::new_local());
+        let murmur = BatchedMurmur::default();
         let keys: Vec<_> = keyset(50).collect();
         let announce = BatchedMurmurMessage::Announce(*batch.info(), true);
         let messages =
@@ -1160,11 +1172,11 @@ pub mod test {
 
         drop::test::init_logger();
 
-        let public = keyset(1).next().unwrap();
+        let public = keyset(*SIZE).next().unwrap();
         let sender = Arc::new(CollectingSender::new(iter::once(public)));
         let sampler = Arc::new(AllSampler::default());
         let batch = generate_batch(1);
-        let mut murmur = BatchedMurmur::new(KeyPair::random(), Fixed::new_local());
+        let mut murmur = BatchedMurmur::default();
         let announce = BatchedMurmurMessage::Announce(*batch.info(), true);
         let messages = iter::once(announce.clone())
             .chain(generate_transmit(batch))
