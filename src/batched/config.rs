@@ -1,6 +1,9 @@
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 #[cfg_attr(feature = "structopt", derive(structopt::StructOpt))]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 /// Configuration information for `BatchedMurmur`
 pub struct BatchedMurmurConfig {
     #[cfg_attr(feature = "structopt", structopt(long, short, default_value = "8194"))]
