@@ -1,4 +1,3 @@
-use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use drop::async_trait;
@@ -32,7 +31,7 @@ impl RdvConfig {
 
 #[async_trait]
 /// A trait encapsulating a policy for picking Rendezvous point for batch construction
-pub trait RdvPolicy: Send + Sync + FromStr {
+pub trait RdvPolicy: Send + Sync {
     /// Pick a new rendezvous node
     async fn pick(&self) -> RdvConfig;
 }
@@ -62,14 +61,6 @@ impl Fixed {
 impl RdvPolicy for Fixed {
     async fn pick(&self) -> RdvConfig {
         self.config
-    }
-}
-
-impl FromStr for Fixed {
-    type Err = FixedParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        todo!("parse {} into a fixed policy", s)
     }
 }
 
@@ -110,13 +101,5 @@ impl RdvPolicy for RoundRobin {
             .unwrap();
 
         RdvConfig::Remote { peer: *peer }
-    }
-}
-
-impl FromStr for RoundRobin {
-    type Err = FixedParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        todo!("parse  {} into a round robin policy", s)
     }
 }
