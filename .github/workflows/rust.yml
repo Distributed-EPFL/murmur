@@ -12,6 +12,7 @@ jobs:
         os: [ ubuntu-latest, macos-latest, windows-latest ]
     steps:
       - uses: actions/checkout@v2
+        name: git checkout
 
       - uses: actions-rs/toolchain@v1
         name: install toolchain
@@ -43,6 +44,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/checkout@v2
+        name: git checkout
+
       - uses: actions-rs/toolchain@v1
         name: install toolchain
         with:
@@ -55,10 +59,11 @@ jobs:
           command: install
           args: cargo-deny
 
-      - name: cargo deny
-        shell: bash
-        run: |
-          cargo deny check
+      - uses: actions-rs/cargo@v1
+        name: cargo deny
+        with:
+          command: deny
+          args: check
 
   coverage:
     name: coverage testing
