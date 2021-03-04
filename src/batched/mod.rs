@@ -324,6 +324,7 @@ where
     {
         if self.is_delivered(info.digest()).await {
             debug!("already delivered {}, not requesting blocks", info);
+            self.providers.purge(info).await;
             return Ok(());
         }
 
@@ -1170,10 +1171,12 @@ pub mod test {
         use drop::system::sampler::AllSampler;
         use drop::test::keyset;
 
+        use futures::stream::{FuturesUnordered, StreamExt};
+
         drop::test::init_logger();
 
-        let public = keyset(*SIZE).next().unwrap();
-        let sender = Arc::new(CollectingSender::new(iter::once(public)));
+        let keys: Vec<_> = keyset(*SIZE).collect();
+        let sender = Arc::new(CollectingSender::new(keys.iter().copied()));
         let sampler = Arc::new(AllSampler::default());
         let batch = generate_batch(1);
         let mut murmur = BatchedMurmur::default();
@@ -1182,16 +1185,22 @@ pub mod test {
             .chain(generate_transmit(batch))
             .chain(iter::once(announce))
             .map(Arc::new);
+        let messages = keys.clone().into_iter().cycle().zip(messages);
+
         let mut handle = murmur.output(sampler, sender.clone()).await;
 
         let murmur = Arc::new(murmur);
 
-        futures::future::join_all(
-            iter::repeat(murmur.clone())
-                .zip(messages)
-                .map(|(murmur, message)| murmur.process(message, public, sender.clone())),
-        )
-        .await;
+        let futures: FuturesUnordered<_> = iter::repeat((murmur.clone(), sender))
+            .zip(messages)
+            .map(|((murmur, sender), (from, msg))| murmur.process(msg, from, sender))
+            .collect();
+
+        futures
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .for_each(|x| x.expect("processing failed"));
 
         handle.deliver().await.expect("delivery failed");
 
