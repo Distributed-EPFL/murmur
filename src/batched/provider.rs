@@ -2,6 +2,7 @@ use super::{BatchInfo, BlockId};
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt;
 use std::sync::Arc;
 
 use std::time::{Duration, Instant};
@@ -10,6 +11,8 @@ use drop::crypto::key::exchange::PublicKey;
 
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::{self, JoinHandle};
+
+use tracing::trace;
 
 /// An agent handle used for tracking latency information about remote peers
 #[derive(Clone)]
@@ -88,6 +91,7 @@ impl Default for ProviderHandle {
     }
 }
 
+#[derive(Debug)]
 enum Command {
     /// Mark a request as done and update latency
     Received(BlockId, PublicKey, Instant),
@@ -100,6 +104,23 @@ enum Command {
     Latency(PublicKey, oneshot::Sender<Option<Duration>>),
     /// Purge all providers information for specified batch
     Purge(BatchInfo),
+}
+
+impl fmt::Display for Command {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Received(id, pkey, now) =>
+                    format!("received {} from {} on {:#?}", id, pkey, now),
+                Self::Best(id, _, _) => format!("request best for {}", id),
+                Self::Purge(info) => format!("purge for {}", info),
+                Self::Register(id, prov) => format!("{} as provider for {}", prov, id),
+                Self::Latency(key, _) => format!("latency for {}", key),
+            }
+        )
+    }
 }
 
 struct ProviderAgent {
@@ -138,13 +159,23 @@ impl ProviderAgent {
     fn timed_out(&self, id: &BlockId) -> bool {
         self.pending
             .get(id)
-            .map(|(to, _)| Instant::now().duration_since(*to) >= self.timeout)
+            .map(|(to, _)| {
+                if to.elapsed() >= self.timeout {
+                    trace!("time out detected for {}", id);
+                    true
+                } else {
+                    false
+                }
+            })
             .unwrap_or(true)
     }
 
     fn spawn(mut self) -> JoinHandle<Self> {
         task::spawn(async move {
-            while let Some(cmd) = self.commands.recv().await {
+            while let Some(cmd) = self.commands.recv().await.map(|x| {
+                trace!("received command {}", x);
+                x
+            }) {
                 match cmd {
                     Command::Received(id, from, instant) => {
                         if let Entry::Occupied(e) = self.pending.entry(id) {
@@ -153,12 +184,11 @@ impl ProviderAgent {
                             if reg == from {
                                 e.remove_entry();
 
-                                tracing::debug!("registered received {}", id);
-
                                 self.latencies.insert(from, instant.duration_since(to));
-                                self.providers.insert(id, Provider::Complete);
                             }
                         }
+
+                        self.providers.entry(id).and_modify(|x| x.set_complete());
                     }
                     Command::Latency(from, resp) => {
                         let _ = resp.send(self.latencies.get(&from).copied());
@@ -181,7 +211,9 @@ impl ProviderAgent {
                         self.providers
                             .entry(id)
                             .and_modify(|set| {
-                                set.insert(from);
+                                if set.insert(from) {
+                                    trace!("new provider {} for {}", from, id);
+                                }
                             })
                             .or_insert_with(|| from.into());
                         // insert a very high default latency if we don't have information for this peer
@@ -194,8 +226,8 @@ impl ProviderAgent {
                         let iter = (0..info.sequence()).map(|x| BlockId::new(digest, x));
 
                         for id in iter {
-                            self.providers.remove(&id);
                             self.pending.remove(&id);
+                            self.providers.entry(id).and_modify(|x| x.set_complete());
                         }
                     }
                 }
@@ -220,6 +252,10 @@ impl Provider {
         } else {
             false
         }
+    }
+
+    fn set_complete(&mut self) {
+        *self = Self::Complete
     }
 
     fn insert(&mut self, key: PublicKey) -> bool {
