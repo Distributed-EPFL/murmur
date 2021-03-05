@@ -16,7 +16,7 @@ tracing = "0.1"
 tracing-futures = "0.2"
 futures = "0.3"
 lazy_static = { version = "1.4", optional = true } 
-structopt = "0.3"
+structopt = { version = "0.3", optional = true }
 
 [dev-dependencies]
 drop = { git = "https://github.com/Distributed-EPFL/drop", branch = "feature/refactor", features = [ "test" ] }
@@ -26,4 +26,5 @@ tokio = { version = "1", features = [ "rt-multi-thread" ] }
 
 [features]
 default = []
+cli = [ "structopt" ]
 test = [ "drop/test", "lazy_static", "tokio/rt-multi-thread" ]
