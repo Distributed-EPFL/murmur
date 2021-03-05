@@ -374,7 +374,7 @@ where
         match message.deref() {
             BatchedMurmurMessage::Announce(info, has) => {
                 if *has {
-                    self.pull_missing_blocks(*info, (0..info.sequence()), from, sender)
+                    self.pull_missing_blocks(*info, 0..info.sequence(), from, sender)
                         .await?;
                 }
             }
