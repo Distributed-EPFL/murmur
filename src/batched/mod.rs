@@ -77,7 +77,7 @@ pub enum BatchError {
 
 #[derive(Debug, Snafu)]
 /// Errors encountered when processing a message
-pub enum BatchProcessingError {
+pub enum BatchedMurmurError {
     #[snafu(display("network error:{}", source))]
     /// Network error encountered
     Network {
@@ -195,7 +195,7 @@ where
         info: BatchInfo,
         available: bool,
         sender: Arc<S>,
-    ) -> Result<(), BatchProcessingError> {
+    ) -> Result<(), BatchedMurmurError> {
         let message = Arc::new(BatchedMurmurMessage::Announce(info, available));
 
         debug!(
@@ -249,7 +249,7 @@ where
     async fn try_deliver(
         &self,
         digest: &Digest,
-    ) -> Result<Option<Arc<Batch<M>>>, BatchProcessingError> {
+    ) -> Result<Option<Arc<Batch<M>>>, BatchedMurmurError> {
         let mut guard = self.batches.write().await;
 
         match guard.entry(*digest) {
@@ -294,7 +294,7 @@ where
         info: BatchInfo,
         sequence: Sequence,
         sender: Arc<S>,
-    ) -> Result<(), BatchProcessingError>
+    ) -> Result<(), BatchedMurmurError>
     where
         S: Sender<BatchedMurmurMessage<M>>,
     {
@@ -318,7 +318,7 @@ where
         available: impl Iterator<Item = Sequence>,
         from: PublicKey,
         sender: Arc<S>,
-    ) -> Result<(), BatchProcessingError>
+    ) -> Result<(), BatchedMurmurError>
     where
         S: Sender<BatchedMurmurMessage<M>>,
     {
@@ -363,7 +363,7 @@ where
 {
     type Handle = BatchedHandle<M, Arc<Batch<M>>, S, R>;
 
-    type Error = BatchProcessingError;
+    type Error = BatchedMurmurError;
 
     async fn process(
         self: Arc<Self>,
