@@ -56,33 +56,22 @@ pub use sync::test::*;
 use sync::BatchState;
 
 #[derive(Debug, Snafu)]
-/// Errors encountered by `BatchedMurmurHandle` when delivering or broadcasting
-pub enum BatchError {
+/// Errors encountered when processing a message
+pub enum BatchedMurmurError {
     #[snafu(display("instance has died"))]
     /// Channel used by instance is dead
     Channel,
-    #[snafu(display("broadcast failed: {}", source))]
-    /// Unable to broadcast message
-    Broadcast {
-        /// Underliying error cause
-        source: SenderError,
-    },
     #[snafu(display("message signing failed: {}", source))]
     /// Error signing mesage
     Sign {
         /// Underlying error cause
         source: SignError,
     },
-}
-
-#[derive(Debug, Snafu)]
-/// Errors encountered when processing a message
-pub enum BatchedMurmurError {
     #[snafu(display("network error:{}", source))]
     /// Network error encountered
     Network {
         /// Error source
-        source: drop::system::SenderError,
+        source: SenderError,
     },
 
     #[snafu(display("bad block from {}: {}", from, source))]
@@ -642,7 +631,7 @@ where
     S: Sender<BatchedMurmurMessage<I>>,
     R: RdvPolicy,
 {
-    type Error = BatchError;
+    type Error = BatchedMurmurError;
 
     async fn deliver(&mut self) -> Result<O, Self::Error> {
         self.receiver.recv().await.ok_or_else(|| Channel.build())
@@ -684,7 +673,7 @@ where
                 .sender
                 .send(Arc::new(message), peer)
                 .await
-                .context(Broadcast),
+                .context(Network),
         }
     }
 }
