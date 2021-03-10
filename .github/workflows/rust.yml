@@ -77,6 +77,10 @@ jobs:
           profile: minimal
           toolchain: stable
 
+      - uses: Swatinem/rust-cache@v1
+        with:
+          key: "coverage"
+
       - uses: actions-rs/cargo@v1
         name: cargo test
         with:
