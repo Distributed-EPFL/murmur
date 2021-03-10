@@ -927,6 +927,8 @@ pub mod test {
         I2: IntoIterator<Item = PublicKey> + Clone,
         I2::IntoIter: Clone,
     {
+        use futures::stream::{FuturesUnordered, StreamExt};
+
         let sampler = Arc::new(AllSampler::default());
         let sender = Arc::new(CollectingSender::new(keys.clone()));
         let delivery = messages.into_iter().zip(keys.into_iter().cycle());
@@ -935,24 +937,21 @@ pub mod test {
 
         let murmur = Arc::new(murmur);
 
-        let futures =
-            iter::repeat(murmur.clone())
-                .zip(delivery)
-                .map(|(murmur, (message, from))| {
-                    let sender = sender.clone();
+        let futures: FuturesUnordered<_> = iter::repeat(murmur.clone())
+            .zip(delivery)
+            .map(|(murmur, (message, from))| {
+                let sender = sender.clone();
 
-                    tokio::task::spawn(async move {
-                        murmur
-                            .process(Arc::new(message), from, sender)
-                            .await
-                            .expect("processing failed")
-                    })
-                });
+                tokio::task::spawn(async move {
+                    murmur
+                        .process(Arc::new(message), from, sender)
+                        .await
+                        .expect("processing failed")
+                })
+            })
+            .collect();
 
-        futures::future::join_all(futures)
-            .await
-            .into_iter()
-            .for_each(Result::unwrap);
+        futures.map(Result::unwrap).collect::<Vec<_>>().await;
 
         (murmur, sender)
     }
@@ -963,30 +962,27 @@ pub mod test {
 
         drop::test::init_logger();
 
-        let config = BatchedMurmurConfig::default();
-        let murmur = BatchedMurmur::default();
+        let config = BatchedMurmurConfig {
+            batch_delay: 200 * 1000,
+            ..Default::default()
+        };
+        let murmur = BatchedMurmur::new(KeyPair::random(), Fixed::new_local(), config);
         let peers = keyset(50);
         let payloads = generate_collect(config.sponge_threshold() + 1, |x| x * 2);
 
         let (_, sender) = run(murmur, payloads, peers).await;
 
-        time::sleep(config.batch_delay() * 2).await;
-
-        // we need to account for timeout and the payloads could be distributed in mulitple
-        // batches if a timeout occurs before we reach the sponge threshold
         let announce = sender
             .messages()
             .await
             .into_iter()
-            .filter_map(|msg| match msg.1.deref() {
+            .find_map(|msg| match msg.1.deref() {
                 BatchedMurmurMessage::Announce(info, true) => Some(*info),
                 _ => None,
             })
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .fold(0, |acc, curr| acc + curr.size());
+            .expect("no batch announced");
 
-        assert_eq!(announce, config.sponge_threshold() + 1);
+        assert_eq!(announce.size(), config.sponge_threshold());
     }
 
     #[tokio::test]
@@ -1213,7 +1209,7 @@ pub mod test {
     }
 
     #[tokio::test]
-    async fn broadcast_announces() {
+    async fn broadcast_eventually_announces() {
         use drop::test::keyset;
 
         const PEERS: usize = 10;
@@ -1222,7 +1218,6 @@ pub mod test {
 
         let keypair = KeyPair::random();
         let config = BatchedMurmurConfig {
-            sponge_threshold: 1,
             batch_delay: 10,
             ..Default::default()
         };
@@ -1236,12 +1231,12 @@ pub mod test {
 
         handle.broadcast(&0usize).await.expect("broadcast failed");
 
-        time::sleep(config.batch_delay() * 2).await;
-
-        assert!(sender
+        // loop while waiting for batch_delay to expire
+        while !sender
             .messages()
             .await
             .into_iter()
-            .any(|m| { matches!(m.1.deref(), BatchedMurmurMessage::Announce(_, true)) }));
+            .any(|m| matches!(m.1.deref(), BatchedMurmurMessage::Announce(_, true)))
+        {}
     }
 }
