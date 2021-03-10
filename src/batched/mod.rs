@@ -565,7 +565,7 @@ where
         }
 
         let sponge = self.sponge.clone();
-        let timeout = self.config.timeout();
+        let timeout = self.config.batch_delay();
         let gossip = self.gossip.clone();
         let to_sender = sender.clone();
 
@@ -970,7 +970,7 @@ pub mod test {
 
         let (_, sender) = run(murmur, payloads, peers).await;
 
-        time::sleep(config.timeout() * 2).await;
+        time::sleep(config.batch_delay() * 2).await;
 
         // we need to account for timeout and the payloads could be distributed in mulitple
         // batches if a timeout occurs before we reach the sponge threshold
@@ -1223,7 +1223,7 @@ pub mod test {
         let keypair = KeyPair::random();
         let config = BatchedMurmurConfig {
             sponge_threshold: 1,
-            timeout: 1,
+            batch_delay: 10,
             ..Default::default()
         };
 
@@ -1236,7 +1236,7 @@ pub mod test {
 
         handle.broadcast(&0usize).await.expect("broadcast failed");
 
-        time::sleep(config.timeout() * 2).await;
+        time::sleep(config.batch_delay() * 2).await;
 
         assert!(sender
             .messages()
