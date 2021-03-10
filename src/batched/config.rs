@@ -10,44 +10,43 @@ const DEFAULT_BLOCK_SIZE: &str = "256";
 const DEFAULT_BATCH_DELAY: &str = "200";
 const DEFAULT_TIMEOUT: &str = "3";
 
-#[builder(setter(into))]
 #[cfg_attr(feature = "structopt", derive(structopt::StructOpt))]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Builder)]
 /// Configuration information for `BatchedMurmur`
 pub struct BatchedMurmurConfig {
-    #[builder(default = DEFAULT_CHANNEL_CAP)]
     #[cfg_attr(feature = "structopt", structopt(long, short, default_value = DEFAULT_CHANNEL_CAP))]
-    #[doc = "channel buffer size"]
+    #[doc = "Channel buffer size"]
+    #[builder(default = DEFAULT_CHANNEL_CAP)]
     /// Channel capacity
-    channel_cap: usize,
+    pub channel_cap: usize,
 
-    #[builder(default = DEFAULT_SPONGE_THRESHOLD)]
     #[cfg_attr(feature = "structopt", structopt(long, short, default_value = DEFAULT_SPONGE_THRESHOLD))]
-    #[doc = "sponge capacity (this will be the size of locally created batches)"]
+    #[doc = "Sponge capacity (this will be the size of locally created batches)"]
+    #[builder(default = DEFAULT_SPONGE_THRESHOLD)]
     /// Threshold for beginning batch spread in the network
-    sponge_threshold: usize,
+    pub sponge_threshold: usize,
 
-    #[builder(default = DEFAULT_BLOCK_SIZE)]
     #[cfg_attr(feature = "structopt", structopt(long, short, default_value = DEFAULT_BLOCK_SIZE))]
-    #[doc = "size of individual blocks inside locally created batches"]
+    #[doc = "Size of individual blocks inside locally created batches"]
+    #[builder(default = DEFAULT_BLOCK_SIZE)]
     /// Block size
-    block_size: usize,
+    pub block_size: usize,
 
-    #[builder(default = DEFAULT_BATCH_DELAY)]
     #[cfg_attr(feature = "structopt", structopt(long, short, default_value = DEFAULT_BATCH_DELAY))]
-    #[doc = "the maximum amount of time to wait before starting batch propagation"]
+    #[doc = "The maximum amount of time to wait before starting batch propagation in milliseconds"]
+    #[builder(default = DEFAULT_BATCH_DELAY)]
     /// Default delay to start spreading batch in msecs
-    batch_delay: usize,
+    pub batch_delay: u64,
 
     #[cfg_attr(feature = "structopt", structopt(long, short))]
-    #[doc = "expected size  of the gossip set when sampling"]
-    gossip_size: usize,
+    #[doc = "Expected size of the gossip set when sampling"]
+    pub gossip_size: usize,
 
-    #[builder(default = DEFAULT_TIMEOUT)]
     #[cfg_attr(feature = "structopt", structopt(long, short, default_value = DEFAULT_TIMEOUT))]
-    #[doc = "request timeout in seconds"]
+    #[doc = "Request timeout in seconds"]
+    #[builder(default = DEFAULT_TIMEOUT)]
     /// Timeout duration in seconds
-    timeout: usize,
+    pub timeout: u64,
 }
 
 impl BatchedMurmurConfig {
@@ -71,26 +70,26 @@ impl BatchedMurmurConfig {
         self.block_size
     }
 
-    /// Get the batch delay property
-    pub fn batch_delay(&self) -> usize {
-        self.batch_delay
+    /// Get the batch delay
+    pub fn batch_delay(&self) -> Duration {
+        Duration::from_millis(self.batch_delay)
     }
 
     /// Get the timeout duration
     pub fn timeout(&self) -> Duration {
-        Duration::from_secs(self.timeout as u64)
+        Duration::from_secs(self.timeout)
     }
 }
 
 impl Default for BatchedMurmurConfig {
     fn default() -> Self {
         Self {
-            channel_cap: 64,
-            sponge_threshold: 8194,
-            block_size: 256,
-            batch_delay: 200,
+            channel_cap: DEFAULT_CHANNEL_CAP.parse().unwrap(),
+            sponge_threshold: DEFAULT_SPONGE_THRESHOLD.parse().unwrap(),
+            block_size: DEFAULT_BLOCK_SIZE.parse().unwrap(),
+            batch_delay: DEFAULT_BATCH_DELAY.parse().unwrap(),
+            timeout: DEFAULT_TIMEOUT.parse().unwrap(),
             gossip_size: 10,
-            timeout: 3,
         }
     }
 }
