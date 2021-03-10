@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::iter::{self, FromIterator};
+use std::mem;
 
 use drop::crypto::hash::Digest;
 use drop::crypto::sign::{self, KeyPair, Signature, Signer, VerifyError};
@@ -365,11 +366,18 @@ where
         self.payloads.len()
     }
 
-    /// Create a `Batch` by emptying the `Payload`s in this `Sponge`
-    /// Panics:
-    /// Panics if block_size is 0
-    pub fn drain_to_batch(&mut self, block_size: usize) -> Batch<M> {
-        std::mem::take(&mut self.payloads)
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Take ownership of all `Payload`s in this `Sponge`, draining it at the same time.
+    pub fn take(&mut self) -> Vec<Payload<M>> {
+        mem::take(&mut self.payloads)
+    }
+
+    /// Make a `Batch` with specified block size from the given payloads
+    pub fn make_batch(payloads: Vec<Payload<M>>, block_size: usize) -> Batch<M> {
+        payloads
             .chunks(block_size)
             .enumerate()
             .map(|(seq, payloads)| Block::new(seq as Sequence, payloads.iter().cloned()))

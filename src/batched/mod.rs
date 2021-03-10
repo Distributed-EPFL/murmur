@@ -30,7 +30,9 @@ use serde::{Deserialize, Serialize};
 
 use snafu::{OptionExt, ResultExt, Snafu};
 
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{mpsc, RwLock};
+use tokio::task;
+use tokio::time;
 
 use tracing::{debug, error, info, trace, warn};
 
@@ -38,10 +40,13 @@ use tracing::{debug, error, info, trace, warn};
 pub type Sequence = u32;
 
 mod config;
-pub use config::BatchedMurmurConfig;
+pub use config::{BatchedMurmurConfig, BatchedMurmurConfigBuilder};
 
 mod provider;
 use provider::ProviderHandle;
+
+mod sponge;
+use sponge::SpongeHandle;
 
 mod rdv;
 pub use rdv::*;
@@ -150,13 +155,13 @@ pub struct BatchedMurmur<M: Message, R: RdvPolicy> {
     providers: ProviderHandle,
 
     rendezvous: Arc<R>,
-    sponge: Mutex<Sponge<M>>,
+    sponge: SpongeHandle<M>,
 
     delivery: Option<mpsc::Sender<Arc<Batch<M>>>>,
 
     config: BatchedMurmurConfig,
 
-    gossip: RwLock<HashSet<PublicKey>>,
+    gossip: Arc<RwLock<HashSet<PublicKey>>>,
 }
 
 impl<M, R> BatchedMurmur<M, R>
@@ -172,7 +177,11 @@ where
             rendezvous: Arc::new(rendezvous),
             batches: Default::default(),
             gossip: Default::default(),
-            sponge: Default::default(),
+            sponge: SpongeHandle::new(
+                config.channel_cap(),
+                config.sponge_threshold(),
+                config.block_size(),
+            ),
             delivery: Default::default(),
             providers: Default::default(),
         }
@@ -185,6 +194,18 @@ where
         available: bool,
         sender: Arc<S>,
     ) -> Result<(), BatchedMurmurError> {
+        Self::announce_with_set(info, available, sender, self.gossip.read().await.iter()).await
+    }
+
+    async fn announce_with_set<S>(
+        info: BatchInfo,
+        available: bool,
+        sender: Arc<S>,
+        to: impl Iterator<Item = &PublicKey> + Send,
+    ) -> Result<(), BatchedMurmurError>
+    where
+        S: Sender<BatchedMurmurMessage<M>>,
+    {
         let message = Arc::new(BatchedMurmurMessage::Announce(info, available));
 
         debug!(
@@ -193,10 +214,7 @@ where
             info.size()
         );
 
-        sender
-            .send_many(message, self.gossip.read().await.iter())
-            .await
-            .context(Network)
+        sender.send_many(message, to).await.context(Network)
     }
 
     async fn is_delivered(&self, digest: &Digest) -> bool {
@@ -347,7 +365,7 @@ where
 impl<M, S, R> Processor<BatchedMurmurMessage<M>, M, Arc<Batch<M>>, S> for BatchedMurmur<M, R>
 where
     M: Message + 'static,
-    R: RdvPolicy,
+    R: RdvPolicy + 'static,
     S: Sender<BatchedMurmurMessage<M>> + 'static,
 {
     type Handle = BatchedHandle<M, Arc<Batch<M>>, S, R>;
@@ -447,7 +465,6 @@ where
                         self.providers.purge(*info).await;
 
                         if let Err(e) = self.delivery.as_ref().context(Setup)?.send(batch).await {
-                            // FIXME: stop processing messages altogether since we can't deliver anything
                             error!("handle was dropped early: {}", e);
                         }
                     } else {
@@ -461,25 +478,10 @@ where
                     .verify(&self.keypair)
                     .context(InvalidBlock { from })?;
 
-                let mut sponge = self.sponge.lock().await;
-
-                trace!(
-                    "collecting payload from {}, batch completion {}/{}",
-                    from,
-                    sponge.len(),
-                    self.config.sponge_threshold()
-                );
-
-                sponge.insert(payload.clone());
-
-                if sponge.len() >= self.config.sponge_threshold() {
-                    debug!("sponge threshold reached, creating batch...");
-
-                    let batch = sponge.drain_to_batch(self.config.block_size());
+                if let Some(batch) = self.sponge.collect(payload.clone()).await {
                     let info = *batch.info();
 
                     self.insert_batch(batch).await;
-
                     self.announce(info, true, sender).await?;
                 }
             }
@@ -562,7 +564,37 @@ where
             }
         }
 
-        let (deliver_tx, deliver_rx) = mpsc::channel(16);
+        let sponge = self.sponge.clone();
+        let timeout = self.config.timeout();
+        let gossip = self.gossip.clone();
+        let to_sender = sender.clone();
+
+        task::spawn(async move {
+            info!("started batch timeout monitoring");
+
+            loop {
+                time::sleep(timeout).await;
+
+                debug!("timeout reached checking batch status");
+
+                if let Some(batch) = sponge.force().await {
+                    debug!("force created a batch after failing to reach threshold");
+
+                    if let Err(e) = Self::announce_with_set(
+                        *batch.info(),
+                        true,
+                        to_sender.clone(),
+                        gossip.read().await.iter(),
+                    )
+                    .await
+                    {
+                        error!("failed to announce batch to peers: {}", e);
+                    }
+                }
+            }
+        });
+
+        let (deliver_tx, deliver_rx) = mpsc::channel(self.config.channel_cap());
 
         self.delivery.replace(deliver_tx);
 
@@ -571,6 +603,7 @@ where
             self.rendezvous.clone(),
             deliver_rx,
             sender,
+            self.sponge.clone(),
         )
     }
 }
@@ -600,6 +633,7 @@ where
     receiver: mpsc::Receiver<O>,
     sender: Arc<S>,
     policy: Arc<R>,
+    sponge: SpongeHandle<I>,
     sequence: AtomicU32,
     _i: PhantomData<I>,
 }
@@ -611,8 +645,15 @@ where
     S: Sender<BatchedMurmurMessage<I>>,
     R: RdvPolicy,
 {
-    fn new(keypair: KeyPair, policy: Arc<R>, receiver: mpsc::Receiver<O>, sender: Arc<S>) -> Self {
+    fn new(
+        keypair: KeyPair,
+        policy: Arc<R>,
+        receiver: mpsc::Receiver<O>,
+        sender: Arc<S>,
+        sponge: SpongeHandle<I>,
+    ) -> Self {
         Self {
+            sponge,
             policy,
             receiver,
             sender,
@@ -665,15 +706,19 @@ where
             message.clone(),
             signature,
         );
-        let message = BatchedMurmurMessage::Collect(payload);
 
         match self.policy.pick().await {
-            RdvConfig::Local => todo!(),
-            RdvConfig::Remote { ref peer } => self
-                .sender
-                .send(Arc::new(message), peer)
-                .await
-                .context(Network),
+            RdvConfig::Local => {
+                self.sponge.collect_only(payload).await;
+                Ok(())
+            }
+            RdvConfig::Remote { ref peer } => {
+                let message = BatchedMurmurMessage::Collect(payload);
+                self.sender
+                    .send(Arc::new(message), peer)
+                    .await
+                    .context(Network)
+            }
         }
     }
 }
@@ -913,41 +958,6 @@ pub mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn sponge_insertion() {
-        use drop::test::keyset;
-
-        let peers = keyset(50);
-        let murmur = BatchedMurmur::default();
-        let payloads = generate_collect(*SIZE, |x| x);
-
-        let (murmur, _) = run(murmur, payloads, peers).await;
-
-        assert_eq!(
-            murmur.sponge.lock().await.len(),
-            *SIZE,
-            "wrong number of message in sponge"
-        );
-
-        let batch = murmur
-            .sponge
-            .lock()
-            .await
-            .drain_to_batch(*DEFAULT_BLOCK_SIZE);
-
-        assert_eq!(
-            batch.len() as usize,
-            *SIZE,
-            "wrong number of payloads in batch"
-        );
-
-        let keypair = KeyPair::random();
-
-        batch
-            .blocks()
-            .for_each(|block| block.verify(&keypair).expect("block failed to verify"));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn sponge_fill() {
         use drop::test::keyset;
 
@@ -958,13 +968,7 @@ pub mod test {
         let peers = keyset(50);
         let payloads = generate_collect(config.sponge_threshold() + 1, |x| x * 2);
 
-        let (murmur, sender) = run(murmur, payloads, peers).await;
-
-        assert_eq!(
-            murmur.sponge.lock().await.len(),
-            1,
-            "too many message left in sponge"
-        );
+        let (_, sender) = run(murmur, payloads, peers).await;
 
         let announce = sender
             .messages()
@@ -1200,5 +1204,38 @@ pub mod test {
             batches.values().all(State::is_complete),
             "batch was not set as complete"
         );
+    }
+
+    #[tokio::test]
+    async fn broadcast_announces() {
+        use drop::test::keyset;
+
+        const PEERS: usize = 10;
+
+        drop::test::init_logger();
+
+        let keypair = KeyPair::random();
+        let config = BatchedMurmurConfig {
+            sponge_threshold: 1,
+            timeout: 1,
+            ..Default::default()
+        };
+
+        let keys = keyset(PEERS);
+        let mut murmur = BatchedMurmur::new(keypair.clone(), Fixed::new_local(), config);
+        let sampler = Arc::new(AllSampler::default());
+        let sender = Arc::new(CollectingSender::new(keys));
+
+        let mut handle = murmur.output(sampler, sender.clone()).await;
+
+        handle.broadcast(&0usize).await.expect("broadcast failed");
+
+        time::sleep(config.timeout() * 2).await;
+
+        assert!(sender
+            .messages()
+            .await
+            .into_iter()
+            .any(|m| { matches!(m.1.deref(), BatchedMurmurMessage::Announce(_, true)) }));
     }
 }
