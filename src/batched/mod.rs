@@ -970,17 +970,23 @@ pub mod test {
 
         let (_, sender) = run(murmur, payloads, peers).await;
 
+        time::sleep(config.timeout() * 2).await;
+
+        // we need to account for timeout and the payloads could be distributed in mulitple
+        // batches if a timeout occurs before we reach the sponge threshold
         let announce = sender
             .messages()
             .await
             .into_iter()
-            .find_map(|msg| match msg.1.deref() {
+            .filter_map(|msg| match msg.1.deref() {
                 BatchedMurmurMessage::Announce(info, true) => Some(*info),
                 _ => None,
             })
-            .expect("did not announce batch");
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .fold(0, |acc, curr| acc + curr.size());
 
-        assert_eq!(announce.size(), *DEFAULT_SPONGE_THRESHOLD);
+        assert_eq!(announce, config.sponge_threshold() + 1);
     }
 
     #[tokio::test]
