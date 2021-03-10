@@ -17,6 +17,7 @@ tracing-futures = "0.2"
 futures = "0.3"
 lazy_static = { version = "1.4", optional = true } 
 structopt = { version = "0.3", optional = true }
+derive_builder = "0.9"
 
 [dev-dependencies]
 drop = { git = "https://github.com/Distributed-EPFL/drop", branch = "feature/refactor", features = [ "test" ] }
