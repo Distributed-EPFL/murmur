@@ -189,7 +189,15 @@ where
     {
         use drop::crypto::hash;
 
-        let blocks: Vec<_> = i.into_iter().collect();
+        let blocks: Vec<_> = i
+            .into_iter()
+            .enumerate()
+            .map(|(seq, mut block)| {
+                block.sequence = seq as Sequence;
+
+                block
+            })
+            .collect();
         let len = blocks.iter().fold(0, |acc, b| acc + b.len());
         let digest = hash(&blocks).expect("hashing failed");
         let info = BatchInfo::new(len, digest);
@@ -257,6 +265,21 @@ impl<M: Message> Block<M> {
     /// Get an `Iterator` of the `Payloads` in this `Block`
     pub fn iter(&self) -> impl Iterator<Item = &Payload<M>> {
         self.payloads.iter()
+    }
+}
+
+impl<M> FromIterator<Payload<M>> for Block<M>
+where
+    M: Message,
+{
+    fn from_iter<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = Payload<M>>,
+    {
+        Self {
+            sequence: 0,
+            payloads: iter.into_iter().collect(),
+        }
     }
 }
 
