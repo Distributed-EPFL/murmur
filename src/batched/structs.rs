@@ -301,7 +301,8 @@ pub struct Payload<M> {
 }
 
 impl<M> Payload<M> {
-    pub(crate) fn new(
+    /// Create a new `Payload` using given parameters
+    pub fn new(
         sender: sign::PublicKey,
         sequence: Sequence,
         payload: M,
