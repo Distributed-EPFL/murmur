@@ -189,20 +189,22 @@ where
     {
         use drop::crypto::hash;
 
-        let blocks: Vec<_> = i
+        let blocks: BTreeMap<_, Block<M>> = i
             .into_iter()
             .enumerate()
             .map(|(seq, mut block)| {
-                block.sequence = seq as Sequence;
+                let sequence = seq as Sequence;
+                block.sequence = sequence;
 
-                block
+                (sequence, block)
             })
             .collect();
-        let len = blocks.iter().fold(0, |acc, b| acc + b.len());
+        let len = blocks.values().fold(0, |acc, b| acc + b.len());
         let digest = hash(&blocks).expect("hashing failed");
         let info = BatchInfo::new(len, digest);
 
-        Self::new(info, blocks)
+        // FIXME: this would be better using `BTreeMap::into_values`
+        Self::new(info, blocks.values().cloned())
     }
 }
 
