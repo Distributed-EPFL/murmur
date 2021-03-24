@@ -130,7 +130,7 @@ where
 
                 if delivered.is_some() {
                     debug!("already delivered a message");
-                    return AlreadyDelivered.fail();
+                    return Ok(());
                 }
 
                 signer
