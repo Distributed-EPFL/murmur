@@ -373,7 +373,7 @@ where
     type Error = BatchedMurmurError;
 
     async fn process(
-        self: Arc<Self>,
+        &self,
         message: Arc<BatchedMurmurMessage<M>>,
         from: PublicKey,
         sender: Arc<S>,
@@ -1188,7 +1188,9 @@ pub mod test {
 
         let futures: FuturesUnordered<_> = iter::repeat((murmur.clone(), sender))
             .zip(messages)
-            .map(|((murmur, sender), (from, msg))| murmur.process(msg, from, sender))
+            .map(|((murmur, sender), (from, msg))| async move {
+                murmur.process(msg, from, sender).await
+            })
             .collect();
 
         futures

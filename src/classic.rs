@@ -106,7 +106,7 @@ where
     type Error = MurmurProcessingError;
 
     async fn process(
-        self: Arc<Self>,
+        &self,
         message: Arc<MurmurMessage<M>>,
         from: PublicKey,
         sender: Arc<S>,
@@ -321,11 +321,13 @@ pub mod test {
 
         use futures::future;
 
-        future::join_all(subscribes.map(|(key, sub)| {
-            processor
-                .clone()
-                .process(Arc::new(sub), *key, sender.clone())
-        }))
+        future::join_all(
+            std::iter::repeat((processor, sender.clone()))
+                .zip(subscribes)
+                .map(|((processor, sender), (key, sub))| async move {
+                    processor.process(Arc::new(sub), *key, sender.clone()).await
+                }),
+        )
         .await;
 
         let (skeys, messages): (Vec<_>, Vec<_>) = sender.messages().await.into_iter().unzip();
