@@ -829,6 +829,8 @@ pub mod test {
 
     use std::iter;
 
+    pub use super::sync::test::*;
+
     use drop::system::sampler::AllSampler;
     use drop::system::sender::CollectingSender;
 
@@ -987,8 +989,6 @@ pub mod test {
 
     #[tokio::test]
     async fn batch_announce() {
-        use super::sync::test::generate_batch;
-
         use drop::test::keyset;
 
         drop::test::init_logger();
@@ -1020,8 +1020,6 @@ pub mod test {
 
     #[tokio::test]
     async fn multiple_block_sources() {
-        use super::sync::test::generate_batch;
-
         use drop::test::keyset;
 
         drop::test::init_logger();
@@ -1063,8 +1061,6 @@ pub mod test {
 
     #[tokio::test]
     async fn block_pulling() {
-        use super::sync::test::generate_batch;
-
         use drop::test::keyset;
 
         drop::test::init_logger();
@@ -1092,8 +1088,6 @@ pub mod test {
 
     #[tokio::test]
     async fn subscribe_announces_batch() {
-        use super::sync::test::generate_batch;
-
         use drop::test::keyset;
 
         static SUBSCRIBERS: usize = 10;
@@ -1133,8 +1127,6 @@ pub mod test {
 
     #[tokio::test]
     async fn handle_delivery() {
-        use super::sync::test::generate_batch;
-
         use drop::test::{keyset, DummyManager};
 
         drop::test::init_logger();
@@ -1161,8 +1153,6 @@ pub mod test {
 
     #[tokio::test]
     async fn deliver_then_announce() {
-        use super::sync::test::generate_batch;
-
         use drop::system::sampler::AllSampler;
         use drop::test::keyset;
 
