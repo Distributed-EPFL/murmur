@@ -278,7 +278,7 @@ impl From<PublicKey> for Provider {
 
 #[cfg(test)]
 mod test {
-    use super::super::generate_batch;
+    use super::super::test::generate_batch;
     use super::*;
 
     use drop::test::keyset;

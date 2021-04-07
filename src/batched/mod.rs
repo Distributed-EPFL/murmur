@@ -56,8 +56,6 @@ pub use structs::{Batch, BatchInfo, Payload};
 pub(self) use structs::{Block, BlockId, Sponge};
 
 mod sync;
-#[cfg(any(feature = "test", test))]
-pub use sync::test::*;
 use sync::BatchState;
 
 #[derive(Debug, Snafu)]
