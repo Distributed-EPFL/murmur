@@ -15,35 +15,30 @@ const DEFAULT_TIMEOUT: &str = "3";
 /// Configuration information for `BatchedMurmur`
 pub struct BatchedMurmurConfig {
     #[cfg_attr(feature = "structopt", structopt(long, short, default_value = DEFAULT_CHANNEL_CAP))]
-    #[doc = "Channel buffer size"]
     #[builder(default = DEFAULT_CHANNEL_CAP)]
     /// Channel capacity
     pub channel_cap: usize,
 
     #[cfg_attr(feature = "structopt", structopt(long, short, default_value = DEFAULT_SPONGE_THRESHOLD))]
-    #[doc = "Sponge capacity (this will be the size of locally created batches)"]
     #[builder(default = DEFAULT_SPONGE_THRESHOLD)]
     /// Threshold for beginning batch spread in the network
     pub sponge_threshold: usize,
 
-    #[cfg_attr(feature = "structopt", structopt(long, short, default_value = DEFAULT_BLOCK_SIZE))]
-    #[doc = "Size of individual blocks inside locally created batches"]
+    #[cfg_attr(feature = "structopt", structopt(long, default_value = DEFAULT_BLOCK_SIZE))]
     #[builder(default = DEFAULT_BLOCK_SIZE)]
-    /// Block size
+    /// Size of individual blocks inside locally created batches
     pub block_size: usize,
 
-    #[cfg_attr(feature = "structopt", structopt(long, short, default_value = DEFAULT_BATCH_DELAY))]
-    #[doc = "The maximum amount of time to wait before starting batch propagation in milliseconds"]
+    #[cfg_attr(feature = "structopt", structopt(long, default_value = DEFAULT_BATCH_DELAY))]
     #[builder(default = DEFAULT_BATCH_DELAY)]
-    /// Default delay to start spreading batch in msecs
+    /// Default delay before starting to spread a batch in msecs
     pub batch_delay: u64,
 
-    #[cfg_attr(feature = "structopt", structopt(long, short))]
+    #[cfg_attr(feature = "structopt", structopt(long))]
     #[doc = "Expected size of the gossip set when sampling"]
     pub gossip_size: usize,
 
     #[cfg_attr(feature = "structopt", structopt(long, short, default_value = DEFAULT_TIMEOUT))]
-    #[doc = "Request timeout in seconds"]
     #[builder(default = DEFAULT_TIMEOUT)]
     /// Timeout duration in seconds
     pub timeout: u64,
