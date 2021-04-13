@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 
 use snafu::{OptionExt, ResultExt, Snafu};
 
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::task;
 use tokio::time;
 
@@ -628,7 +628,7 @@ where
     R: RdvPolicy,
 {
     signer: Signer,
-    receiver: mpsc::Receiver<O>,
+    receiver: Mutex<mpsc::Receiver<O>>,
     sender: Arc<S>,
     policy: Arc<R>,
     sponge: SpongeHandle<I>,
@@ -653,8 +653,8 @@ where
         Self {
             sponge,
             policy,
-            receiver,
             sender,
+            receiver: Mutex::new(receiver),
             signer: Signer::new(keypair),
             sequence: AtomicU32::new(0),
             _i: PhantomData,
@@ -672,11 +672,16 @@ where
 {
     type Error = BatchedMurmurError;
 
-    async fn deliver(&mut self) -> Result<O, Self::Error> {
-        self.receiver.recv().await.ok_or_else(|| Channel.build())
+    async fn deliver(&self) -> Result<O, Self::Error> {
+        self.receiver
+            .lock()
+            .await
+            .recv()
+            .await
+            .ok_or_else(|| Channel.build())
     }
 
-    async fn try_deliver(&mut self) -> Result<Option<O>, Self::Error> {
+    async fn try_deliver(&self) -> Result<Option<O>, Self::Error> {
         use futures::{
             future::{self, Either},
             pin_mut,
@@ -693,7 +698,7 @@ where
         }
     }
 
-    async fn broadcast(&mut self, message: &I) -> Result<(), Self::Error> {
+    async fn broadcast(&self, message: &I) -> Result<(), Self::Error> {
         trace!("starting broadcast of {:?}", message);
 
         let signature = self.signer.sign(message).context(Sign)?;
