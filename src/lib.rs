@@ -4,14 +4,8 @@
 
 //! Implementation of a probabilistic broadcast algorithm using Erdös-Rényi
 //! gossip on top of the `drop` crate. <br />
-//! This crate contains two version of the `Murmur` algorithm, a classic `Murmur`
-//! able to broadcast or receive a single message per instance and a `BatchedMurmur`
-//! which provides batching and multishot broadcasting and receiving.
-//! See `drop` documentation for more details on how to use `Murmur`.
+//!
+//! See examples directory for some examples of how to use this in your own project
 
-/// Implementation of the classic murmur, without batching and other optimisations
-pub mod classic;
-
-/// Implemenation of murmur that provides batching, latency and other optimisations
-///
-pub mod batched;
+mod batched;
+pub use batched::*;
