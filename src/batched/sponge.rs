@@ -76,8 +76,8 @@ where
 {
     fn new(sponge: Sponge<M>, block_size: usize, rx: mpsc::Receiver<Command<M>>) -> Self {
         Self {
-            block_size,
             sponge,
+            block_size,
             rx,
         }
     }

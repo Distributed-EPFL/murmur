@@ -11,9 +11,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::marker::PhantomData;
 use std::ops::Deref;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -139,6 +137,15 @@ pub enum BatchedMurmurMessage<M: Message> {
     /// Put a message in a `Batch` using a Rendezvous node
     #[serde(bound(deserialize = "M: Message"))]
     Collect(Payload<M>),
+}
+
+impl<M> From<Payload<M>> for BatchedMurmurMessage<M>
+where
+    M: Message,
+{
+    fn from(payload: Payload<M>) -> Self {
+        Self::Collect(payload)
+    }
 }
 
 /// A version of Murmur that provides multiple optimisation over `Murmur` such as
@@ -360,7 +367,8 @@ where
 }
 
 #[async_trait]
-impl<M, S, R> Processor<BatchedMurmurMessage<M>, M, Arc<Batch<M>>, S> for BatchedMurmur<M, R>
+impl<M, S, R> Processor<BatchedMurmurMessage<M>, Payload<M>, Arc<Batch<M>>, S>
+    for BatchedMurmur<M, R>
 where
     M: Message + 'static,
     R: RdvPolicy + 'static,
@@ -597,7 +605,6 @@ where
         self.delivery.replace(deliver_tx);
 
         BatchedHandle::new(
-            self.keypair.clone(),
             self.rendezvous.clone(),
             deliver_rx,
             sender,
@@ -627,13 +634,10 @@ where
     S: Sender<BatchedMurmurMessage<I>>,
     R: RdvPolicy,
 {
-    signer: Signer,
     receiver: Mutex<mpsc::Receiver<O>>,
     sender: Arc<S>,
     policy: Arc<R>,
     sponge: SpongeHandle<I>,
-    sequence: AtomicU32,
-    _i: PhantomData<I>,
 }
 
 impl<I, O, S, R> BatchedHandle<I, O, S, R>
@@ -644,7 +648,6 @@ where
     R: RdvPolicy,
 {
     fn new(
-        keypair: KeyPair,
         policy: Arc<R>,
         receiver: mpsc::Receiver<O>,
         sender: Arc<S>,
@@ -655,15 +658,12 @@ where
             policy,
             sender,
             receiver: Mutex::new(receiver),
-            signer: Signer::new(keypair),
-            sequence: AtomicU32::new(0),
-            _i: PhantomData,
         }
     }
 }
 
 #[async_trait]
-impl<I, O, S, R> Handle<I, O> for BatchedHandle<I, O, S, R>
+impl<I, O, S, R> Handle<Payload<I>, O> for BatchedHandle<I, O, S, R>
 where
     I: Message,
     O: Send,
@@ -698,17 +698,10 @@ where
         }
     }
 
-    async fn broadcast(&self, message: &I) -> Result<(), Self::Error> {
+    async fn broadcast(&self, message: &Payload<I>) -> Result<(), Self::Error> {
         trace!("starting broadcast of {:?}", message);
 
-        let signature = self.signer.sign(message).context(Sign)?;
-
-        let payload = Payload::new(
-            *self.signer.public(),
-            self.sequence.fetch_add(1, Ordering::AcqRel),
-            message.clone(),
-            signature,
-        );
+        let payload = message.clone();
 
         match self.policy.pick().await {
             RdvConfig::Local => {
@@ -716,7 +709,8 @@ where
                 Ok(())
             }
             RdvConfig::Remote { ref peer } => {
-                let message = BatchedMurmurMessage::Collect(payload);
+                let message = payload.into();
+
                 self.sender
                     .send(Arc::new(message), peer)
                     .await
@@ -1144,7 +1138,7 @@ pub mod test {
             iter::repeat(keys[0]).zip(iter::once(announce).chain(generate_transmit(batch)));
         let mut manager = DummyManager::with_key(messages, keys);
 
-        let mut handle = manager.run(murmur).await;
+        let handle = manager.run(murmur).await;
 
         let recv: Arc<Batch<u32>> = handle.deliver().await.expect("deliver failed");
 
@@ -1175,7 +1169,7 @@ pub mod test {
             .map(Arc::new);
         let messages = keys.clone().into_iter().cycle().zip(messages);
 
-        let mut handle = murmur.output(sampler, sender.clone()).await;
+        let handle = murmur.output(sampler, sender.clone()).await;
 
         let murmur = Arc::new(murmur);
 
@@ -1222,9 +1216,15 @@ pub mod test {
         let sampler = Arc::new(AllSampler::default());
         let sender = Arc::new(CollectingSender::new(keys));
 
-        let mut handle = murmur.output(sampler, sender.clone()).await;
+        let handle = murmur.output(sampler, sender.clone()).await;
 
-        handle.broadcast(&0usize).await.expect("broadcast failed");
+        let message = 0usize;
+        let source = *keypair.public();
+        let signature = Signer::new(keypair).sign(&message).expect("sign failed");
+
+        let payload = Payload::new(source, 0, 0usize, signature);
+
+        handle.broadcast(&payload).await.expect("broadcast failed");
 
         // loop while waiting for batch_delay to expire
         while !sender
