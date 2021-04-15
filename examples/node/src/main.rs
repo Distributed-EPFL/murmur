@@ -8,7 +8,7 @@ use drop::system::manager::{Handle, SystemManager};
 use drop::system::sampler::AllSampler;
 use drop::system::System;
 
-use murmur::batched::{BatchedMurmur, BatchedMurmurConfig, Fixed};
+use murmur::{Fixed, Murmur, MurmurConfig};
 
 use snafu::{ResultExt, Snafu};
 
@@ -105,7 +105,7 @@ async fn main() {
     // set it up to use a local batching policy
     // note that murmur takes a different kind of cryptographic keys since those are only used to sign messages
     // and not to perform network communication
-    let murmur = BatchedMurmur::new(sign::KeyPair::random(), Fixed::new_local(), config.murmur);
+    let murmur = Murmur::new(sign::KeyPair::random(), Fixed::new_local(), config.murmur);
 
     // we choose to use a deterministic version of murmur by selecting a sampler that takes every known peer
     let sampler = AllSampler::default();

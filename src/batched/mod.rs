@@ -24,11 +24,14 @@ use drop::system::{message, Message, Processor, Sampler, Sender, SenderError};
 
 use futures::future::OptionFuture;
 
+use postage::dispatch;
+use postage::prelude::*;
+
 use serde::{Deserialize, Serialize};
 
 use snafu::{OptionExt, ResultExt, Snafu};
 
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{mpsc, RwLock};
 use tokio::task;
 use tokio::time;
 
@@ -38,7 +41,7 @@ use tracing::{debug, error, info, trace, warn};
 pub type Sequence = u32;
 
 mod config;
-pub use config::{BatchedMurmurConfig, BatchedMurmurConfigBuilder};
+pub use config::{MurmurConfig, MurmurConfigBuilder};
 
 mod provider;
 use provider::ProviderHandle;
@@ -58,7 +61,7 @@ use sync::BatchState;
 
 #[derive(Debug, Snafu)]
 /// Errors encountered when processing a message
-pub enum BatchedMurmurError {
+pub enum MurmurError {
     #[snafu(display("instance has died"))]
     /// Channel used by instance is dead
     Channel,
@@ -122,7 +125,7 @@ impl Ord for BlockProvider {
 
 #[message]
 /// Messages exchanged by `BatchedMurmur`
-pub enum BatchedMurmurMessage<M: Message> {
+pub enum MurmurMessage<M: Message> {
     /// Peer announces a `Batch` and whether it has it
     Announce(BatchInfo, bool),
     /// Advertise the view we have of a `Batch`
@@ -139,7 +142,7 @@ pub enum BatchedMurmurMessage<M: Message> {
     Collect(Payload<M>),
 }
 
-impl<M> From<Payload<M>> for BatchedMurmurMessage<M>
+impl<M> From<Payload<M>> for MurmurMessage<M>
 where
     M: Message,
 {
@@ -153,7 +156,7 @@ where
 /// It also supports multi-shot broadcasting, e.g. one sender can send multiple block
 /// using the same instance of `BatchedMurmur` as well as receive multiple messages using
 /// the same instance
-pub struct BatchedMurmur<M: Message, R: RdvPolicy> {
+pub struct Murmur<M: Message, R: RdvPolicy> {
     keypair: KeyPair,
     batches: RwLock<HashMap<Digest, State<M>>>,
 
@@ -162,20 +165,20 @@ pub struct BatchedMurmur<M: Message, R: RdvPolicy> {
     rendezvous: Arc<R>,
     sponge: SpongeHandle<M>,
 
-    delivery: Option<mpsc::Sender<Arc<Batch<M>>>>,
+    delivery: Option<dispatch::Sender<Arc<Batch<M>>>>,
 
-    config: BatchedMurmurConfig,
+    config: MurmurConfig,
 
     gossip: Arc<RwLock<HashSet<PublicKey>>>,
 }
 
-impl<M, R> BatchedMurmur<M, R>
+impl<M, R> Murmur<M, R>
 where
     M: Message + 'static,
     R: RdvPolicy,
 {
     /// Create a new `BatchedMurmur`
-    pub fn new(keypair: KeyPair, rendezvous: R, config: BatchedMurmurConfig) -> Self {
+    pub fn new(keypair: KeyPair, rendezvous: R, config: MurmurConfig) -> Self {
         Self {
             keypair,
             config,
@@ -193,12 +196,12 @@ where
     }
 
     /// Announces the specified `Batch` to gossip peers
-    async fn announce<S: Sender<BatchedMurmurMessage<M>> + 'static>(
+    async fn announce<S: Sender<MurmurMessage<M>> + 'static>(
         &self,
         info: BatchInfo,
         available: bool,
         sender: Arc<S>,
-    ) -> Result<(), BatchedMurmurError> {
+    ) -> Result<(), MurmurError> {
         Self::announce_with_set(info, available, sender, self.gossip.read().await.iter()).await
     }
 
@@ -207,11 +210,11 @@ where
         available: bool,
         sender: Arc<S>,
         to: impl Iterator<Item = &PublicKey> + Send,
-    ) -> Result<(), BatchedMurmurError>
+    ) -> Result<(), MurmurError>
     where
-        S: Sender<BatchedMurmurMessage<M>>,
+        S: Sender<MurmurMessage<M>>,
     {
-        let message = Arc::new(BatchedMurmurMessage::Announce(info, available));
+        let message = Arc::new(MurmurMessage::Announce(info, available));
 
         debug!(
             "announcing new batch {} of size {} to peers",
@@ -258,10 +261,7 @@ where
         }
     }
 
-    async fn try_deliver(
-        &self,
-        digest: &Digest,
-    ) -> Result<Option<Arc<Batch<M>>>, BatchedMurmurError> {
+    async fn try_deliver(&self, digest: &Digest) -> Result<Option<Arc<Batch<M>>>, MurmurError> {
         let mut guard = self.batches.write().await;
 
         match guard.entry(*digest) {
@@ -306,11 +306,11 @@ where
         info: BatchInfo,
         sequence: Sequence,
         sender: Arc<S>,
-    ) -> Result<(), BatchedMurmurError>
+    ) -> Result<(), MurmurError>
     where
-        S: Sender<BatchedMurmurMessage<M>>,
+        S: Sender<MurmurMessage<M>>,
     {
-        let message = BatchedMurmurMessage::Advertise(info, vec![sequence]);
+        let message = MurmurMessage::Advertise(info, vec![sequence]);
 
         debug!(
             "advertising block {} from {} to peers",
@@ -330,9 +330,9 @@ where
         available: impl Iterator<Item = Sequence>,
         from: PublicKey,
         sender: Arc<S>,
-    ) -> Result<(), BatchedMurmurError>
+    ) -> Result<(), MurmurError>
     where
-        S: Sender<BatchedMurmurMessage<M>>,
+        S: Sender<MurmurMessage<M>>,
     {
         if self.is_delivered(info.digest()).await {
             debug!("already delivered {}, not requesting blocks", info);
@@ -352,7 +352,7 @@ where
             self.providers.register_provider(id, from).await;
 
             if let Some(provider) = self.providers.best_provider(id).await {
-                let message = Arc::new(BatchedMurmurMessage::Pull(id));
+                let message = Arc::new(MurmurMessage::Pull(id));
 
                 debug!("pulling {} from {}", id, from);
 
@@ -367,32 +367,31 @@ where
 }
 
 #[async_trait]
-impl<M, S, R> Processor<BatchedMurmurMessage<M>, Payload<M>, Arc<Batch<M>>, S>
-    for BatchedMurmur<M, R>
+impl<M, S, R> Processor<MurmurMessage<M>, Payload<M>, Arc<Batch<M>>, S> for Murmur<M, R>
 where
     M: Message + 'static,
     R: RdvPolicy + 'static,
-    S: Sender<BatchedMurmurMessage<M>> + 'static,
+    S: Sender<MurmurMessage<M>> + 'static,
 {
-    type Handle = BatchedHandle<M, Arc<Batch<M>>, S, R>;
+    type Handle = MurmurHandle<M, Arc<Batch<M>>, S, R>;
 
-    type Error = BatchedMurmurError;
+    type Error = MurmurError;
 
     async fn process(
         &self,
-        message: Arc<BatchedMurmurMessage<M>>,
+        message: Arc<MurmurMessage<M>>,
         from: PublicKey,
         sender: Arc<S>,
     ) -> Result<(), Self::Error> {
         match message.deref() {
-            BatchedMurmurMessage::Announce(info, has) => {
+            MurmurMessage::Announce(info, has) => {
                 if *has {
                     self.pull_missing_blocks(*info, 0..info.sequence(), from, sender)
                         .await?;
                 }
             }
 
-            BatchedMurmurMessage::Advertise(info, blocks) => {
+            MurmurMessage::Advertise(info, blocks) => {
                 trace!(
                     "{} advertising {} blocks from batch {}",
                     from,
@@ -404,7 +403,7 @@ where
                     .await?;
             }
 
-            BatchedMurmurMessage::Pull(blockid) => {
+            MurmurMessage::Pull(blockid) => {
                 trace!(
                     "request for block {}  for batch {} from {}",
                     blockid.sequence(),
@@ -423,7 +422,7 @@ where
                         digest: *blockid.digest(),
                     })?;
 
-                    let message = BatchedMurmurMessage::Transmit(info, blockid.sequence(), block);
+                    let message = MurmurMessage::Transmit(info, blockid.sequence(), block);
 
                     sender
                         .send(Arc::new(message), &from)
@@ -438,7 +437,7 @@ where
                 }
             }
 
-            BatchedMurmurMessage::Transmit(info, sequence, block) => {
+            MurmurMessage::Transmit(info, sequence, block) => {
                 if self.is_delivered(info.digest()).await {
                     debug!("late transmit for block {} of {}", sequence, info);
                     return Ok(());
@@ -470,16 +469,20 @@ where
 
                         self.providers.purge(*info).await;
 
-                        if let Err(e) = self.delivery.as_ref().context(Setup)?.send(batch).await {
-                            error!("handle was dropped early: {}", e);
-                        }
+                        self.delivery
+                            .as_ref()
+                            .map(Clone::clone)
+                            .context(Setup)?
+                            .send(batch)
+                            .await
+                            .map_err(|_| Channel.build())?;
                     } else {
                         self.advertise(*info, *sequence, sender.clone()).await?;
                     }
                 }
             }
 
-            BatchedMurmurMessage::Collect(payload) => {
+            MurmurMessage::Collect(payload) => {
                 payload
                     .verify(&self.keypair)
                     .context(InvalidBlock { from })?;
@@ -492,7 +495,7 @@ where
                 }
             }
 
-            BatchedMurmurMessage::Subscribe => {
+            MurmurMessage::Subscribe => {
                 if self.gossip.write().await.insert(from) {
                     // FIXME: pending issue https://github.com/rust-lang/rust/issues/64552
                     //     stream::iter(self.batches.read().await.values())
@@ -522,7 +525,7 @@ where
                             from
                         );
                         let available = batch.available();
-                        let message = BatchedMurmurMessage::Announce(*batch.info(), available);
+                        let message = MurmurMessage::Announce(*batch.info(), available);
 
                         sender
                             .send(Arc::new(message), &from)
@@ -551,9 +554,8 @@ where
         self.gossip.write().await.extend(sample);
 
         sender
-            .clone()
             .send_many(
-                Arc::new(BatchedMurmurMessage::Subscribe),
+                Arc::new(MurmurMessage::Subscribe),
                 self.gossip.read().await.iter(),
             )
             .await
@@ -600,11 +602,11 @@ where
             }
         });
 
-        let (deliver_tx, deliver_rx) = mpsc::channel(self.config.channel_cap());
+        let (deliver_tx, deliver_rx) = dispatch::channel(self.config.channel_cap());
 
         self.delivery.replace(deliver_tx);
 
-        BatchedHandle::new(
+        MurmurHandle::new(
             self.rendezvous.clone(),
             deliver_rx,
             sender,
@@ -613,7 +615,7 @@ where
     }
 }
 
-impl<M> Default for BatchedMurmur<M, Fixed>
+impl<M> Default for Murmur<M, Fixed>
 where
     M: Message + 'static,
 {
@@ -621,80 +623,74 @@ where
         Self::new(
             KeyPair::random(),
             Fixed::new_local(),
-            BatchedMurmurConfig::default(),
+            MurmurConfig::default(),
         )
     }
 }
 
-/// A `Handle` to interact with a `BatchedMurmur` instance
-pub struct BatchedHandle<I, O, S, R>
+/// A `Handle` to interact with a [`Murmur]` instance
+///
+/// [`Murmur`]: self::Murmur
+pub struct MurmurHandle<I, O, S, R>
 where
     I: Message + 'static,
     O: Send,
-    S: Sender<BatchedMurmurMessage<I>>,
+    S: Sender<MurmurMessage<I>>,
     R: RdvPolicy,
 {
-    receiver: Mutex<mpsc::Receiver<O>>,
+    receiver: dispatch::Receiver<O>,
     sender: Arc<S>,
     policy: Arc<R>,
     sponge: SpongeHandle<I>,
 }
 
-impl<I, O, S, R> BatchedHandle<I, O, S, R>
+impl<I, O, S, R> MurmurHandle<I, O, S, R>
 where
     I: Message + 'static,
     O: Send,
-    S: Sender<BatchedMurmurMessage<I>>,
+    S: Sender<MurmurMessage<I>>,
     R: RdvPolicy,
 {
     fn new(
         policy: Arc<R>,
-        receiver: mpsc::Receiver<O>,
+        receiver: dispatch::Receiver<O>,
         sender: Arc<S>,
         sponge: SpongeHandle<I>,
     ) -> Self {
         Self {
-            sponge,
-            policy,
+            receiver,
             sender,
-            receiver: Mutex::new(receiver),
+            policy,
+            sponge,
         }
     }
 }
 
 #[async_trait]
-impl<I, O, S, R> Handle<Payload<I>, O> for BatchedHandle<I, O, S, R>
+impl<I, O, S, R> Handle<Payload<I>, O> for MurmurHandle<I, O, S, R>
 where
     I: Message,
     O: Send,
-    S: Sender<BatchedMurmurMessage<I>>,
+    S: Sender<MurmurMessage<I>>,
     R: RdvPolicy,
 {
-    type Error = BatchedMurmurError;
+    type Error = MurmurError;
 
     async fn deliver(&self) -> Result<O, Self::Error> {
         self.receiver
-            .lock()
-            .await
+            .clone()
             .recv()
             .await
             .ok_or_else(|| Channel.build())
     }
 
     async fn try_deliver(&self) -> Result<Option<O>, Self::Error> {
-        use futures::{
-            future::{self, Either},
-            pin_mut,
-        };
+        use postage::stream::TryRecvError;
 
-        let fut = self.deliver();
-
-        pin_mut!(fut);
-
-        match future::select(fut, future::ready(())).await {
-            Either::Left((Err(e), _)) => Err(e),
-            Either::Left((Ok(msg), _)) => Ok(Some(msg)),
-            Either::Right((_, _)) => Ok(None),
+        match self.receiver.clone().try_recv() {
+            Ok(message) => Ok(Some(message)),
+            Err(TryRecvError::Pending) => Ok(None),
+            Err(_) => Channel.fail(),
         }
     }
 
@@ -716,6 +712,25 @@ where
                     .await
                     .context(Network)
             }
+        }
+    }
+}
+
+// deriving the trait automatically doesn't work, rustc complains that
+// all generic paramters are not Clone although they are in an Arc...
+impl<I, O, S, R> Clone for MurmurHandle<I, O, S, R>
+where
+    I: Message,
+    O: Send,
+    S: Sender<MurmurMessage<I>>,
+    R: RdvPolicy,
+{
+    fn clone(&self) -> Self {
+        Self {
+            receiver: self.receiver.clone(),
+            sender: self.sender.clone(),
+            policy: self.policy.clone(),
+            sponge: self.sponge.clone(),
         }
     }
 }
@@ -835,19 +850,15 @@ pub mod test {
 
     #[allow(dead_code)]
     lazy_static! {
-        static ref SIZE: usize = BatchedMurmurConfig::default().block_size() * 10;
-        static ref DEFAULT_SPONGE_THRESHOLD: usize =
-            BatchedMurmurConfig::default().sponge_threshold();
-        static ref DEFAULT_BLOCK_SIZE: usize = BatchedMurmurConfig::default().block_size();
+        static ref SIZE: usize = MurmurConfig::default().block_size() * 10;
+        static ref DEFAULT_SPONGE_THRESHOLD: usize = MurmurConfig::default().sponge_threshold();
+        static ref DEFAULT_BLOCK_SIZE: usize = MurmurConfig::default().block_size();
     }
 
-    fn generate_sequence<M, F>(
-        count: usize,
-        generator: F,
-    ) -> impl Iterator<Item = BatchedMurmurMessage<M>>
+    fn generate_sequence<M, F>(count: usize, generator: F) -> impl Iterator<Item = MurmurMessage<M>>
     where
         M: Message,
-        F: FnMut(usize) -> BatchedMurmurMessage<M>,
+        F: FnMut(usize) -> MurmurMessage<M>,
     {
         (0..count).map(generator)
     }
@@ -856,7 +867,7 @@ pub mod test {
     pub fn generate_collect<M, F>(
         count: usize,
         generator: F,
-    ) -> impl Iterator<Item = BatchedMurmurMessage<M>>
+    ) -> impl Iterator<Item = MurmurMessage<M>>
     where
         M: Message,
         F: Fn(usize) -> M,
@@ -870,12 +881,12 @@ pub mod test {
 
             let payload = Payload::new(source, x as Sequence, content, signature);
 
-            BatchedMurmurMessage::Collect(payload)
+            MurmurMessage::Collect(payload)
         })
     }
 
     /// Generate a sequence of `Pull` messages for the entirety of the provided `Batch`
-    pub fn generate_pull<M>(batch: &Batch<M>) -> impl Iterator<Item = BatchedMurmurMessage<M>> + '_
+    pub fn generate_pull<M>(batch: &Batch<M>) -> impl Iterator<Item = MurmurMessage<M>> + '_
     where
         M: Message,
     {
@@ -888,12 +899,12 @@ pub mod test {
             let digest = digest;
             let id = BlockId::new(digest, seq);
 
-            BatchedMurmurMessage::Pull(id)
+            MurmurMessage::Pull(id)
         })
     }
 
     /// Generate a sequence of `Transmit` messages that contains the whole `Batch`
-    pub fn generate_transmit<M>(batch: Batch<M>) -> impl Iterator<Item = BatchedMurmurMessage<M>>
+    pub fn generate_transmit<M>(batch: Batch<M>) -> impl Iterator<Item = MurmurMessage<M>>
     where
         M: Message,
     {
@@ -905,24 +916,21 @@ pub mod test {
             let block = blocks.next().expect("invalid batch size");
             let sequence = block.sequence();
 
-            BatchedMurmurMessage::Transmit(info, sequence, block)
+            MurmurMessage::Transmit(info, sequence, block)
         })
     }
 
     /// Run the select processor as if all messages in the message `Iterator` were received from
     /// the network using the keys in the keys `Iterator` in a cycle as sources.
     pub async fn run<M, R, I1, I2>(
-        mut murmur: BatchedMurmur<M, R>,
+        mut murmur: Murmur<M, R>,
         messages: I1,
         keys: I2,
-    ) -> (
-        Arc<BatchedMurmur<M, R>>,
-        Arc<CollectingSender<BatchedMurmurMessage<M>>>,
-    )
+    ) -> (Arc<Murmur<M, R>>, Arc<CollectingSender<MurmurMessage<M>>>)
     where
         M: Message + 'static,
         R: RdvPolicy + 'static,
-        I1: IntoIterator<Item = BatchedMurmurMessage<M>>,
+        I1: IntoIterator<Item = MurmurMessage<M>>,
         I2: IntoIterator<Item = PublicKey> + Clone,
         I2::IntoIter: Clone,
     {
@@ -932,7 +940,7 @@ pub mod test {
         let sender = Arc::new(CollectingSender::new(keys.clone()));
         let delivery = messages.into_iter().zip(keys.into_iter().cycle());
 
-        murmur.output(sampler, sender.clone()).await;
+        let _handle = murmur.output(sampler, sender.clone()).await;
 
         let murmur = Arc::new(murmur);
 
@@ -961,11 +969,11 @@ pub mod test {
 
         drop::test::init_logger();
 
-        let config = BatchedMurmurConfig {
+        let config = MurmurConfig {
             batch_delay: 200 * 1000,
             ..Default::default()
         };
-        let murmur = BatchedMurmur::new(KeyPair::random(), Fixed::new_local(), config);
+        let murmur = Murmur::new(KeyPair::random(), Fixed::new_local(), config);
         let peers = keyset(50);
         let payloads = generate_collect(config.sponge_threshold() + 1, |x| x * 2);
 
@@ -976,7 +984,7 @@ pub mod test {
             .await
             .into_iter()
             .find_map(|msg| match msg.1.deref() {
-                BatchedMurmurMessage::Announce(info, true) => Some(*info),
+                MurmurMessage::Announce(info, true) => Some(*info),
                 _ => None,
             })
             .expect("no batch announced");
@@ -992,10 +1000,10 @@ pub mod test {
 
         let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
         let info = *batch.info();
-        let announce = BatchedMurmurMessage::Announce(*batch.info(), true);
+        let announce = MurmurMessage::Announce(*batch.info(), true);
         let messages = iter::once(announce).chain(generate_transmit(batch));
         let keys: Vec<_> = keyset(*SIZE / 100).collect();
-        let murmur = BatchedMurmur::default();
+        let murmur = Murmur::default();
 
         let (murmur, sender) = run(murmur, messages, keys).await;
 
@@ -1010,9 +1018,9 @@ pub mod test {
 
         assert!(outgoing.len() >= 2, "not enough messages sent");
 
-        assert!(outgoing.iter().any(
-            |msg| matches!(msg.1.deref(), &BatchedMurmurMessage::Announce(i, true) if info == i)
-        ));
+        assert!(outgoing
+            .iter()
+            .any(|msg| matches!(msg.1.deref(), &MurmurMessage::Announce(i, true) if info == i)));
     }
 
     #[tokio::test]
@@ -1025,12 +1033,12 @@ pub mod test {
 
         let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
         let info = *batch.info();
-        let announce = BatchedMurmurMessage::Announce(*batch.info(), true);
+        let announce = MurmurMessage::Announce(*batch.info(), true);
         let messages = iter::repeat(announce.clone())
             .take(peer_count)
             .chain(generate_transmit(batch));
         let keys: Vec<_> = keyset(peer_count).collect();
-        let murmur = BatchedMurmur::default();
+        let murmur = Murmur::default();
 
         let (_, sender) = run(murmur, messages, keys).await;
         let messages = sender.messages().await;
@@ -1038,9 +1046,7 @@ pub mod test {
         for blockid in (0..info.sequence()).map(|seq| BlockId::new(*info.digest(), seq)) {
             let pulls = messages
                 .iter()
-                .filter(
-                    |msg| matches!(msg.1.deref(), &BatchedMurmurMessage::Pull(id) if blockid == id),
-                )
+                .filter(|msg| matches!(msg.1.deref(), &MurmurMessage::Pull(id) if blockid == id))
                 .count();
 
             assert_eq!(
@@ -1052,7 +1058,7 @@ pub mod test {
 
         messages
             .iter()
-            .find(|msg| matches!(msg.1.deref(), &BatchedMurmurMessage::Announce(_, true)))
+            .find(|msg| matches!(msg.1.deref(), &MurmurMessage::Announce(_, true)))
             .expect("did not announce completed batch");
     }
 
@@ -1065,7 +1071,7 @@ pub mod test {
         let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
         let info = *batch.info();
         let pulls = generate_pull(&batch);
-        let murmur = BatchedMurmur::default();
+        let murmur = Murmur::default();
         let keys: Vec<_> = keyset(*SIZE / 100).collect();
 
         murmur.insert_batch(batch.clone()).await;
@@ -1078,7 +1084,7 @@ pub mod test {
             let sequence = block.sequence();
 
             assert!(sent.iter().any(
-                |(_, msg)| matches!(msg.deref(), &BatchedMurmurMessage::Transmit(i, s, _) if info == i && s == sequence)
+                |(_, msg)| matches!(msg.deref(), &MurmurMessage::Transmit(i, s, _) if info == i && s == sequence)
             ), "missing transmit message for block");
         }
     }
@@ -1091,12 +1097,12 @@ pub mod test {
         drop::test::init_logger();
 
         let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
-        let murmur = BatchedMurmur::default();
+        let murmur = Murmur::default();
         let keys: Vec<_> = keyset(50).collect();
 
         murmur.insert_batch(batch).await;
 
-        let messages = iter::repeat(BatchedMurmurMessage::Subscribe).take(SUBSCRIBERS);
+        let messages = iter::repeat(MurmurMessage::Subscribe).take(SUBSCRIBERS);
 
         let (murmur, sender) = run(murmur, messages, keys.clone()).await;
 
@@ -1106,7 +1112,7 @@ pub mod test {
 
         let announce = msg
             .into_iter()
-            .filter(|msg| matches!(msg.deref(), &BatchedMurmurMessage::Announce(_, true)))
+            .filter(|msg| matches!(msg.deref(), &MurmurMessage::Announce(_, true)))
             .count();
 
         assert_eq!(
@@ -1131,9 +1137,9 @@ pub mod test {
         let keypair = KeyPair::random();
         let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
         let info = *batch.info();
-        let murmur = BatchedMurmur::default();
+        let murmur = Murmur::default();
         let keys: Vec<_> = keyset(50).collect();
-        let announce = BatchedMurmurMessage::Announce(*batch.info(), true);
+        let announce = MurmurMessage::Announce(*batch.info(), true);
         let messages =
             iter::repeat(keys[0]).zip(iter::once(announce).chain(generate_transmit(batch)));
         let mut manager = DummyManager::with_key(messages, keys);
@@ -1161,8 +1167,8 @@ pub mod test {
         let sender = Arc::new(CollectingSender::new(keys.iter().copied()));
         let sampler = Arc::new(AllSampler::default());
         let batch = generate_batch(1);
-        let mut murmur = BatchedMurmur::default();
-        let announce = BatchedMurmurMessage::Announce(*batch.info(), true);
+        let mut murmur = Murmur::default();
+        let announce = MurmurMessage::Announce(*batch.info(), true);
         let messages = iter::once(announce.clone())
             .chain(generate_transmit(batch))
             .chain(iter::once(announce))
@@ -1206,13 +1212,13 @@ pub mod test {
         drop::test::init_logger();
 
         let keypair = KeyPair::random();
-        let config = BatchedMurmurConfig {
+        let config = MurmurConfig {
             batch_delay: 10,
             ..Default::default()
         };
 
         let keys = keyset(PEERS);
-        let mut murmur = BatchedMurmur::new(keypair.clone(), Fixed::new_local(), config);
+        let mut murmur = Murmur::new(keypair.clone(), Fixed::new_local(), config);
         let sampler = Arc::new(AllSampler::default());
         let sender = Arc::new(CollectingSender::new(keys));
 
@@ -1231,7 +1237,7 @@ pub mod test {
             .messages()
             .await
             .into_iter()
-            .any(|m| matches!(m.1.deref(), BatchedMurmurMessage::Announce(_, true)))
+            .any(|m| matches!(m.1.deref(), MurmurMessage::Announce(_, true)))
         {}
     }
 }

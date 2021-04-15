@@ -13,7 +13,7 @@ const DEFAULT_TIMEOUT: &str = "3";
 #[cfg_attr(feature = "structopt", derive(structopt::StructOpt))]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Builder)]
 /// Configuration information for `BatchedMurmur`
-pub struct BatchedMurmurConfig {
+pub struct MurmurConfig {
     #[cfg_attr(feature = "structopt", structopt(long, short, default_value = DEFAULT_CHANNEL_CAP))]
     #[builder(default = DEFAULT_CHANNEL_CAP)]
     /// Channel capacity
@@ -44,7 +44,7 @@ pub struct BatchedMurmurConfig {
     pub timeout: u64,
 }
 
-impl BatchedMurmurConfig {
+impl MurmurConfig {
     /// Get the channel capacity from this configuration
     pub fn channel_cap(&self) -> usize {
         self.channel_cap
@@ -76,7 +76,7 @@ impl BatchedMurmurConfig {
     }
 }
 
-impl Default for BatchedMurmurConfig {
+impl Default for MurmurConfig {
     fn default() -> Self {
         Self {
             channel_cap: DEFAULT_CHANNEL_CAP.parse().unwrap(),
