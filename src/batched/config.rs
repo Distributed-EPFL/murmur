@@ -4,7 +4,7 @@ use derive_builder::Builder;
 
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_SPONGE_THRESHOLD: &str = "8194";
+const DEFAULT_SPONGE_THRESHOLD: &str = "1024";
 const DEFAULT_CHANNEL_CAP: &str = "64";
 const DEFAULT_BLOCK_SIZE: &str = "256";
 const DEFAULT_BATCH_DELAY: &str = "200";
