@@ -36,7 +36,7 @@ pub struct MurmurConfig {
 
     #[cfg_attr(feature = "structopt", structopt(long))]
     #[doc = "Expected size of the gossip set when sampling"]
-    pub gossip_size: usize,
+    pub murmur_gossip_size: usize,
 
     #[cfg_attr(feature = "structopt", structopt(long, short, default_value = DEFAULT_TIMEOUT))]
     #[builder(default = DEFAULT_TIMEOUT)]
@@ -52,7 +52,7 @@ impl MurmurConfig {
 
     /// Get the expected size of the gossip set of peers
     pub fn gossip_size(&self) -> usize {
-        self.gossip_size
+        self.murmur_gossip_size
     }
 
     /// Get the sponge threshold
@@ -84,7 +84,7 @@ impl Default for MurmurConfig {
             block_size: DEFAULT_BLOCK_SIZE.parse().unwrap(),
             batch_delay: DEFAULT_BATCH_DELAY.parse().unwrap(),
             timeout: DEFAULT_TIMEOUT.parse().unwrap(),
-            gossip_size: 10,
+            murmur_gossip_size: 10,
         }
     }
 }
