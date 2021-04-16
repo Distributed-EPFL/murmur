@@ -676,25 +676,21 @@ where
 {
     type Error = MurmurError;
 
-    async fn deliver(&self) -> Result<O, Self::Error> {
-        self.receiver
-            .clone()
-            .recv()
-            .await
-            .ok_or_else(|| Channel.build())
+    async fn deliver(&mut self) -> Result<O, Self::Error> {
+        self.receiver.recv().await.ok_or_else(|| Channel.build())
     }
 
-    async fn try_deliver(&self) -> Result<Option<O>, Self::Error> {
+    async fn try_deliver(&mut self) -> Result<Option<O>, Self::Error> {
         use postage::stream::TryRecvError;
 
-        match self.receiver.clone().try_recv() {
+        match self.receiver.try_recv() {
             Ok(message) => Ok(Some(message)),
             Err(TryRecvError::Pending) => Ok(None),
             Err(_) => Channel.fail(),
         }
     }
 
-    async fn broadcast(&self, message: &Payload<I>) -> Result<(), Self::Error> {
+    async fn broadcast(&mut self, message: &Payload<I>) -> Result<(), Self::Error> {
         trace!("starting broadcast of {:?}", message);
 
         let payload = message.clone();
@@ -1144,7 +1140,7 @@ pub mod test {
             iter::repeat(keys[0]).zip(iter::once(announce).chain(generate_transmit(batch)));
         let mut manager = DummyManager::with_key(messages, keys);
 
-        let handle = manager.run(murmur).await;
+        let mut handle = manager.run(murmur).await;
 
         let recv: Arc<Batch<u32>> = handle.deliver().await.expect("deliver failed");
 
@@ -1175,7 +1171,7 @@ pub mod test {
             .map(Arc::new);
         let messages = keys.clone().into_iter().cycle().zip(messages);
 
-        let handle = murmur.output(sampler, sender.clone()).await;
+        let mut handle = murmur.output(sampler, sender.clone()).await;
 
         let murmur = Arc::new(murmur);
 
@@ -1222,7 +1218,7 @@ pub mod test {
         let sampler = Arc::new(AllSampler::default());
         let sender = Arc::new(CollectingSender::new(keys));
 
-        let handle = murmur.output(sampler, sender.clone()).await;
+        let mut handle = murmur.output(sampler, sender.clone()).await;
 
         let message = 0usize;
         let source = *keypair.public();
