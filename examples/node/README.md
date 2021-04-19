@@ -8,7 +8,7 @@ For simplicity all arguments are provided on the command line.
 
 ``` shell
 node 0.1.0
-Configuration information for `BatchedMurmur`
+Configuration information for `Murmur`
 
 USAGE:
     node [OPTIONS] --gossip-size <gossip-size> --listen <listener-addr> [peers]...

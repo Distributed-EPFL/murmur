@@ -124,7 +124,9 @@ impl Ord for BlockProvider {
 }
 
 #[message]
-/// Messages exchanged by `BatchedMurmur`
+/// Messages exchanged by [`Murmur`]
+///
+/// [`Murmur`]: self::Murmur
 pub enum MurmurMessage<M: Message> {
     /// Peer announces a `Batch` and whether it has it
     Announce(BatchInfo, bool),
@@ -151,11 +153,13 @@ where
     }
 }
 
-/// A version of Murmur that provides multiple optimisation over `Murmur` such as
+/// A version of Murmur that provides multiple optimisation over [`Murmur]` such as
 /// latency selection of peers, batching and bittorrent-like block distribution.
 /// It also supports multi-shot broadcasting, e.g. one sender can send multiple block
-/// using the same instance of `BatchedMurmur` as well as receive multiple messages using
+/// using the same instance of [`Murmur]` as well as receive multiple messages using
 /// the same instance
+///
+/// [`Murmur`]: crate::::Murmur
 pub struct Murmur<M: Message, R: RdvPolicy> {
     keypair: KeyPair,
     batches: RwLock<HashMap<Digest, State<M>>>,
@@ -177,7 +181,7 @@ where
     M: Message + 'static,
     R: RdvPolicy,
 {
-    /// Create a new `BatchedMurmur`
+    /// Create a new `Murmur` instance
     pub fn new(keypair: KeyPair, rendezvous: R, config: MurmurConfig) -> Self {
         Self {
             keypair,
@@ -502,8 +506,8 @@ where
                     //         })
                     //         .zip(stream::repeat(sender))
                     //         .for_each_concurrent(None, |(batch, sender)| async move {
-                    //             let message = BatchedMurmurMessage::Announce(batch.info(), true);
-
+                    //             let message = MurmurMessage::Announce(batch.info(), true);
+                    //
                     //             if let Err(e) = sender.send(Arc::new(message), &from).await {
                     //                 error!("error announcing to {}: {}", from, e);
                     //             }
@@ -622,9 +626,10 @@ where
     }
 }
 
-/// A `Handle` to interact with a [`Murmur]` instance
+/// A [`Handle`] to interact with a [`Murmur`] instance
 ///
 /// [`Murmur`]: self::Murmur
+/// [`Handle`]: drop::system::manager::Handle
 pub struct MurmurHandle<I, O, S, R>
 where
     I: Message + 'static,
@@ -825,7 +830,9 @@ where
 
 #[cfg(any(test, feature = "test"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "test")))]
-/// Test utilites for `BatchedMurmur`
+/// Test utilites for [`Murmur`]
+///
+/// [`Murmur`]: self::Murmur
 pub mod test {
     use super::*;
 

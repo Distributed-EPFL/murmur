@@ -12,7 +12,9 @@ const DEFAULT_TIMEOUT: &str = "3";
 
 #[cfg_attr(feature = "structopt", derive(structopt::StructOpt))]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Builder)]
-/// Configuration information for `BatchedMurmur`
+/// Configuration information for [`Murmur`]
+///
+/// [`Murmur`]: super::Murmur
 pub struct MurmurConfig {
     #[cfg_attr(feature = "structopt", structopt(long, short, default_value = DEFAULT_CHANNEL_CAP))]
     #[builder(default = DEFAULT_CHANNEL_CAP)]
