@@ -18,7 +18,7 @@ use std::time::Duration;
 use drop::async_trait;
 use drop::crypto::hash::Digest;
 use drop::crypto::key::exchange::PublicKey;
-use drop::crypto::sign::{KeyPair, SignError, Signer, VerifyError};
+use drop::crypto::sign::{KeyPair, SignError, VerifyError};
 use drop::system::manager::Handle;
 use drop::system::{message, Message, Processor, Sampler, Sender, SenderError};
 
@@ -862,6 +862,8 @@ pub mod test {
         M: Message,
         F: Fn(usize) -> M,
     {
+        use drop::crypto::sign::Signer;
+
         generate_sequence(count, move |x| {
             let mut signer = Signer::random();
             let source = *signer.public();
@@ -1195,6 +1197,7 @@ pub mod test {
 
     #[tokio::test]
     async fn broadcast_eventually_announces() {
+        use drop::crypto::sign::Signer;
         use drop::test::keyset;
 
         const PEERS: usize = 10;
