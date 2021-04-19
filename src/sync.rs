@@ -11,7 +11,7 @@ use drop::system::Message;
 
 use snafu::{ensure, Backtrace, ResultExt, Snafu};
 
-use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use tokio::sync::{RwLock, RwLockMappedWriteGuard, RwLockReadGuard, RwLockWriteGuard};
 
 use tracing::{debug, trace};
 
@@ -101,24 +101,17 @@ impl<M: Message + 'static> BatchState<M> {
         self.blocks().await.get(&sequence).map(Clone::clone)
     }
 
-    // /// Returns a mutable reference to the map of blocks.
-    // /// This returns an error if the batch is already complete
-    // async fn blocks_mut(
-    //     &self,
-    // ) -> Result<RwLockWriteGuard<'_, BTreeMap<Sequence, Block<M>>>, BlockError> {
-    //     RwLockWriteGuard::try_map(self.state.write().await, |state| match state {
-    //         State::Pending(ref mut blocks, _) => Some(blocks),
-    //         _ => None,
-    //     })
-    //     .map_err(|_| snafu::NoneError)
-    //     .context(Completed)
-    // }
-
-    async fn blocks_mut(&self) -> Result<BlockWriteGuard<'_, M>, BlockError> {
-        use std::convert::TryInto;
-        let state = self.state.write().await;
-
-        Ok(state.try_into()?)
+    /// Returns a mutable reference to the map of blocks.
+    /// This returns an error if the batch is already complete
+    async fn blocks_mut(
+        &self,
+    ) -> Result<RwLockMappedWriteGuard<'_, BTreeMap<Sequence, Block<M>>>, BlockError> {
+        RwLockWriteGuard::try_map(self.state.write().await, |state| match state {
+            State::Pending(ref mut blocks) => Some(blocks),
+            _ => None,
+        })
+        .map_err(|_| snafu::NoneError)
+        .context(Completed)
     }
 
     /// Returns the map of blocks of this `BatchState`
@@ -187,59 +180,6 @@ where
             self.info.digest(),
             self.info.sequence()
         )
-    }
-}
-
-/// Temporary wrapper until tokio allows mapping RwLockWriteGuard again
-#[derive(Debug)]
-pub struct BlockWriteGuard<'a, M>
-where
-    M: Message,
-{
-    lock: RwLockWriteGuard<'a, State<M>>,
-}
-
-impl<'a, M> std::ops::Deref for BlockWriteGuard<'a, M>
-where
-    M: Message,
-{
-    type Target = BTreeMap<Sequence, Block<M>>;
-
-    fn deref(&self) -> &Self::Target {
-        if let State::Pending(ref blocks, ..) = *self.lock {
-            blocks
-        } else {
-            panic!("")
-        }
-    }
-}
-
-impl<'a, M> DerefMut for BlockWriteGuard<'a, M>
-where
-    M: Message,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        if let State::Pending(ref mut blocks, ..) = *self.lock {
-            blocks
-        } else {
-            // BlockWriteGuard shouldn't be created from a complete batch
-            unreachable!()
-        }
-    }
-}
-
-impl<'a, M> std::convert::TryFrom<RwLockWriteGuard<'a, State<M>>> for BlockWriteGuard<'a, M>
-where
-    M: Message,
-{
-    type Error = BlockError;
-
-    fn try_from(lock: RwLockWriteGuard<'a, State<M>>) -> Result<Self, Self::Error> {
-        if let State::Pending { .. } = *lock {
-            Ok(Self { lock })
-        } else {
-            Completed.fail()
-        }
     }
 }
 
