@@ -1,14 +1,14 @@
 use std::net::{AddrParseError, SocketAddr};
 
 use drop::crypto::key::exchange::{Exchanger, KeyPair, PublicKey};
-use drop::crypto::sign;
+use drop::crypto::sign::{self, Signer};
 use drop::crypto::ParseHexError;
 use drop::net::{TcpConnector, TcpListener};
 use drop::system::manager::{Handle, SystemManager};
 use drop::system::sampler::AllSampler;
 use drop::system::System;
 
-use murmur::{Fixed, Murmur, MurmurConfig};
+use murmur::{Fixed, Murmur, MurmurConfig, Payload, Sequence};
 
 use snafu::{ResultExt, Snafu};
 
@@ -61,7 +61,7 @@ enum PeerParseError {
 /// Command line argument processing is delegated to the structopt cratev
 struct NodeConfig {
     #[structopt(flatten)]
-    murmur: BatchedMurmurConfig,
+    murmur: MurmurConfig,
 
     #[structopt(short("-l"), long("--listen"))]
     /// Address to listen on for incoming connections
@@ -81,6 +81,9 @@ async fn main() {
     // We generate a random `KeyPair` in this example but it can also be serialized
     // and stored on-disk for resuming operations with the same identity
     let keypair = KeyPair::random();
+
+    let sign_keypair = sign::KeyPair::random();
+    let mut signer = Signer::new(sign_keypair.clone());
 
     println!("local identity is {}", keypair.public());
 
@@ -105,7 +108,7 @@ async fn main() {
     // set it up to use a local batching policy
     // note that murmur takes a different kind of cryptographic keys since those are only used to sign messages
     // and not to perform network communication
-    let murmur = Murmur::new(sign::KeyPair::random(), Fixed::new_local(), config.murmur);
+    let murmur = Murmur::new(sign_keypair.clone(), Fixed::new_local(), config.murmur);
 
     // we choose to use a deterministic version of murmur by selecting a sampler that takes every known peer
     let sampler = AllSampler::default();
@@ -116,7 +119,13 @@ async fn main() {
 
     // now we start broadcasting all integers from 0 to 1999 on the network
     for i in 0..MESSAGE_COUNT {
-        handle.broadcast(&i).await.expect("broadcasting failed");
+        let signature = signer.sign(&i).expect("sign failed");
+        let payload = Payload::new(*sign_keypair.public(), i as Sequence, i, signature);
+
+        handle
+            .broadcast(&payload)
+            .await
+            .expect("broadcasting failed");
     }
 
     // if the byzantine bounds hold in our current network we should eventually deliver every broadcasted message
