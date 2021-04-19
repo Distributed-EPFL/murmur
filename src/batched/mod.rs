@@ -266,13 +266,7 @@ where
 
         match guard.entry(*digest) {
             Entry::Vacant(_) => Ok(None),
-            Entry::Occupied(mut e) => {
-                if let Some(batch) = e.get_mut().ready().await {
-                    Ok(Some(batch))
-                } else {
-                    Ok(None)
-                }
-            }
+            Entry::Occupied(mut e) => Ok(e.get_mut().ready().await),
         }
     }
 
