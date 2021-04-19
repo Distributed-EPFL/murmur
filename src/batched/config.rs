@@ -47,32 +47,12 @@ pub struct MurmurConfig {
 }
 
 impl MurmurConfig {
-    /// Get the channel capacity from this configuration
-    pub fn channel_cap(&self) -> usize {
-        self.channel_cap
-    }
-
-    /// Get the expected size of the gossip set of peers
-    pub fn gossip_size(&self) -> usize {
-        self.murmur_gossip_size
-    }
-
-    /// Get the sponge threshold
-    pub fn sponge_threshold(&self) -> usize {
-        self.sponge_threshold
-    }
-
-    /// Get the block size
-    pub fn block_size(&self) -> usize {
-        self.block_size
-    }
-
-    /// Get the batch delay
+    /// Get the batch delay as a Duration
     pub fn batch_delay(&self) -> Duration {
         Duration::from_millis(self.batch_delay)
     }
 
-    /// Get the timeout duration
+    /// Get the timeout duration as a Duration
     pub fn timeout(&self) -> Duration {
         Duration::from_secs(self.timeout)
     }

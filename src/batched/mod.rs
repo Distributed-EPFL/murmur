@@ -190,9 +190,9 @@ where
             batches: Default::default(),
             gossip: Default::default(),
             sponge: SpongeHandle::new(
-                config.channel_cap(),
-                config.sponge_threshold(),
-                config.block_size(),
+                config.channel_cap,
+                config.sponge_threshold,
+                config.block_size,
             ),
             delivery: Default::default(),
             providers: Default::default(),
@@ -540,7 +540,7 @@ where
     async fn output<SA: Sampler>(&mut self, sampler: Arc<SA>, sender: Arc<S>) -> Self::Handle {
         let keys = sender.keys().await;
         let sample = sampler
-            .sample(keys.iter().copied(), self.config.gossip_size())
+            .sample(keys.iter().copied(), self.config.murmur_gossip_size)
             .await
             .expect("sampling failed");
 
@@ -600,7 +600,7 @@ where
             }
         });
 
-        let (deliver_tx, deliver_rx) = dispatch::channel(self.config.channel_cap());
+        let (deliver_tx, deliver_rx) = dispatch::channel(self.config.channel_cap);
 
         self.delivery.replace(deliver_tx);
 
@@ -847,9 +847,9 @@ pub mod test {
 
     #[allow(dead_code)]
     lazy_static! {
-        static ref SIZE: usize = MurmurConfig::default().block_size() * 10;
-        static ref DEFAULT_SPONGE_THRESHOLD: usize = MurmurConfig::default().sponge_threshold();
-        static ref DEFAULT_BLOCK_SIZE: usize = MurmurConfig::default().block_size();
+        static ref SIZE: usize = MurmurConfig::default().block_size * 10;
+        static ref DEFAULT_SPONGE_THRESHOLD: usize = MurmurConfig::default().sponge_threshold;
+        static ref DEFAULT_BLOCK_SIZE: usize = MurmurConfig::default().block_size;
     }
 
     fn generate_sequence<M, F>(count: usize, generator: F) -> impl Iterator<Item = MurmurMessage<M>>
@@ -974,7 +974,7 @@ pub mod test {
         };
         let murmur = Murmur::new(KeyPair::random(), Fixed::new_local(), config);
         let peers = keyset(50);
-        let payloads = generate_collect(config.sponge_threshold() + 1, |x| x * 2);
+        let payloads = generate_collect(config.sponge_threshold + 1, |x| x * 2);
 
         let (_, sender) = run(murmur, payloads, peers).await;
 
@@ -988,7 +988,7 @@ pub mod test {
             })
             .expect("no batch announced");
 
-        assert_eq!(announce.size(), config.sponge_threshold());
+        assert_eq!(announce.size(), config.sponge_threshold);
     }
 
     #[tokio::test]
