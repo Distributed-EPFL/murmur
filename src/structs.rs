@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::iter::{self, FromIterator};
+use std::mem;
 
 use drop::crypto::hash::Digest;
 use drop::crypto::sign::{self, KeyPair, Signature, Signer, VerifyError};
@@ -46,6 +47,12 @@ impl Ord for BlockId {
     }
 }
 
+impl fmt::Display for BlockId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "block {} of batch {}", self.sequence, self.digest)
+    }
+}
+
 /// Information about a `Batch`
 #[message]
 #[derive(Copy)]
@@ -82,11 +89,10 @@ impl fmt::Display for BatchInfo {
     }
 }
 
-#[message]
 /// A batch of blocks that is being broadcasted
+#[derive(Clone)]
 pub struct Batch<M: Message> {
     info: BatchInfo,
-    #[serde(bound(deserialize = "M: Message"))]
     blocks: BTreeMap<Sequence, Block<M>>,
 }
 
@@ -112,7 +118,7 @@ impl<M: Message> Batch<M> {
         self.blocks.iter().map(|(_, b)| b)
     }
 
-    /// Get the length of this `Batch`
+    /// Get the length of this `Batch` in number of `Payload`s
     pub fn len(&self) -> Sequence {
         self.blocks
             .iter()
@@ -120,13 +126,24 @@ impl<M: Message> Batch<M> {
             .fold(0, |acc, x| acc + x.len())
     }
 
+    /// Get an ``Iterator` to the `Payload`s in this `Batch`
+    pub fn iter(&self) -> impl Iterator<Item = &Payload<M>> {
+        self.blocks.values().map(|x| x.iter()).flatten()
+    }
+
     /// Check if this `Batch` is empty
     pub fn is_empty(&self) -> bool {
         !self.blocks.values().any(|b| b.len() > 0)
     }
 
+    /// Get a `Block` from this `Batch` using its `Sequence`
+    pub fn get(&self, sequence: Sequence) -> Option<Block<M>> {
+        self.blocks.get(&sequence).map(Clone::clone)
+    }
+
     /// Convert this `Batch` into an `Iterator` of its `Block`s
     pub fn into_blocks(self) -> impl Iterator<Item = Block<M>> {
+        // FIXME: pending stablization of `BTreeMap::into_values`
         self.blocks.into_iter().map(|(_, v)| v)
     }
 }
@@ -137,11 +154,11 @@ impl<M: Message> std::ops::Index<Sequence> for Batch<M> {
     fn index(&self, sequence: Sequence) -> &Self::Output {
         let mut len = 0;
 
-        for block in self.blocks.iter().map(|(_, b)| b) {
+        for block in self.blocks.values() {
             len += block.len();
 
             if len > sequence {
-                return &block[sequence - len];
+                return &block[len - sequence];
             }
         }
 
@@ -157,9 +174,7 @@ impl<M: Message + 'static> IntoIterator for Batch<M> {
     fn into_iter(self) -> Self::IntoIter {
         let init: Box<dyn Iterator<Item = Payload<M>>> = Box::new(iter::empty());
 
-        self.blocks
-            .into_iter()
-            .map(|(_, b)| b)
+        self.into_blocks()
             .fold(init, |acc, curr| Box::new(acc.chain(curr)))
     }
 }
@@ -174,12 +189,42 @@ where
     {
         use drop::crypto::hash;
 
-        let blocks: Vec<_> = i.into_iter().collect();
-        let len = blocks.iter().fold(0, |acc, b| acc + b.len());
+        let blocks: BTreeMap<_, Block<M>> = i
+            .into_iter()
+            .enumerate()
+            .map(|(seq, mut block)| {
+                let sequence = seq as Sequence;
+                block.sequence = sequence;
+
+                (sequence, block)
+            })
+            .collect();
+        let len = blocks.values().fold(0, |acc, b| acc + b.len());
         let digest = hash(&blocks).expect("hashing failed");
         let info = BatchInfo::new(len, digest);
 
-        Self::new(info, blocks)
+        // FIXME: this would be better using `BTreeMap::into_values`
+        Self::new(info, blocks.values().cloned())
+    }
+}
+
+impl<M> From<(BatchInfo, BTreeMap<Sequence, Block<M>>)> for Batch<M>
+where
+    M: Message,
+{
+    fn from(v: (BatchInfo, BTreeMap<Sequence, Block<M>>)) -> Self {
+        let (info, blocks) = v;
+
+        Self { info, blocks }
+    }
+}
+
+impl<M> fmt::Display for Batch<M>
+where
+    M: Message,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.info.digest())
     }
 }
 
@@ -217,6 +262,26 @@ impl<M: Message> Block<M> {
     /// Returns the number of payloads in this `Block`
     pub fn len(&self) -> Sequence {
         self.payloads.len() as u32
+    }
+
+    /// Get an `Iterator` of the `Payloads` in this `Block`
+    pub fn iter(&self) -> impl Iterator<Item = &Payload<M>> {
+        self.payloads.iter()
+    }
+}
+
+impl<M> FromIterator<Payload<M>> for Block<M>
+where
+    M: Message,
+{
+    fn from_iter<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = Payload<M>>,
+    {
+        Self {
+            sequence: 0,
+            payloads: iter.into_iter().collect(),
+        }
     }
 }
 
@@ -261,7 +326,8 @@ pub struct Payload<M> {
 }
 
 impl<M> Payload<M> {
-    pub(crate) fn new(
+    /// Create a new `Payload` using given parameters
+    pub fn new(
         sender: sign::PublicKey,
         sequence: Sequence,
         payload: M,
@@ -273,6 +339,11 @@ impl<M> Payload<M> {
             payload,
             signature,
         }
+    }
+
+    /// Get the origin of this `Payload`
+    pub fn sender(&self) -> &sign::PublicKey {
+        &self.sender
     }
 
     /// Get the `Signature` for this `Payload`
@@ -321,11 +392,18 @@ where
         self.payloads.len()
     }
 
-    /// Create a `Batch` by emptying the `Payload`s in this `Sponge`
-    /// Panics:
-    /// Panics if block_size is 0
-    pub fn drain_to_batch(&mut self, block_size: usize) -> Batch<M> {
-        std::mem::take(&mut self.payloads)
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Take ownership of all `Payload`s in this `Sponge`, draining it at the same time.
+    pub fn take(&mut self) -> Vec<Payload<M>> {
+        mem::take(&mut self.payloads)
+    }
+
+    /// Make a `Batch` with specified block size from the given payloads
+    pub fn make_batch(payloads: Vec<Payload<M>>, block_size: usize) -> Batch<M> {
+        payloads
             .chunks(block_size)
             .enumerate()
             .map(|(seq, payloads)| Block::new(seq as Sequence, payloads.iter().cloned()))

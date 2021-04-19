@@ -1,0 +1,13 @@
+[package]
+name = "node"
+version = "0.1.0"
+authors = ["Ogier Bouvier <ogier@bouvier.family>"]
+edition = "2018"
+license = "AGPL-3"
+
+[dependencies]
+drop = { git = "https://github.com/Distributed-EPFL/drop", branch = "feature/refactor", features = [ "system" ] }
+murmur = { path = "../..", features = [ "cli" ] } # the cli feature provide a convenient way to load murmur config from command line
+tokio = { version = "1", features = [ "macros", "rt-multi-thread" ] }
+structopt = "0.3"
+snafu = "0.6"

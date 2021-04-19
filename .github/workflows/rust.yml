@@ -12,12 +12,16 @@ jobs:
         os: [ ubuntu-latest, macos-latest, windows-latest ]
     steps:
       - uses: actions/checkout@v2
+        name: git checkout
 
       - uses: actions-rs/toolchain@v1
         name: install toolchain
         with:
           profile: minimal
           toolchain: ${{ matrix.rust }}
+
+      - uses: Swatinem/rust-cache@v1
+        name: caching
 
       - uses: actions-rs/cargo@v1
         name: cargo check
@@ -35,6 +39,32 @@ jobs:
         with:
           command: test
 
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+        name: git checkout
+
+      - uses: actions-rs/toolchain@v1
+        name: install toolchain
+        with:
+          profile: minimal
+          toolchain: stable
+
+      - uses: actions-rs/cargo@v1
+        name: install cargo deny
+        with:
+          command: install
+          args: cargo-deny
+
+      - uses: actions-rs/cargo@v1
+        name: cargo deny
+        with:
+          command: deny
+          args: check
+
   coverage:
     name: coverage testing
     runs-on: ubuntu-20.04
@@ -46,6 +76,10 @@ jobs:
         with:
           profile: minimal
           toolchain: stable
+
+      - uses: Swatinem/rust-cache@v1
+        with:
+          key: "coverage"
 
       - uses: actions-rs/cargo@v1
         name: cargo test
