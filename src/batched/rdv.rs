@@ -3,8 +3,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use drop::async_trait;
 use drop::crypto::key::exchange::PublicKey;
 
-use snafu::Snafu;
-
 /// Batch creation configuration enum.
 #[derive(Copy, Clone, Debug)]
 pub enum RdvConfig {
@@ -62,18 +60,6 @@ impl RdvPolicy for Fixed {
     async fn pick(&self) -> RdvConfig {
         self.config
     }
-}
-
-#[derive(Debug, Snafu)]
-/// Parse error encountered when parsing a `Fixed` `RdvPolicy`
-pub struct FixedParseError(FixedParseErrorInner);
-
-#[derive(Debug, Snafu)]
-enum FixedParseErrorInner {
-    #[snafu(display("badly formatted policy"))]
-    BadFmt,
-    #[snafu(display("error parsing key"))]
-    KeyParse,
 }
 
 /// A `RdvPolicy` that uses round-robin to decide which batcher to use
