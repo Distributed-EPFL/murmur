@@ -4,6 +4,7 @@ use derive_builder::Builder;
 
 use serde::{Deserialize, Serialize};
 
+const DEFAULT_EXPIRATION_MINUTE: &str = "5";
 const DEFAULT_SPONGE_THRESHOLD: &str = "1024";
 const DEFAULT_CHANNEL_CAP: &str = "64";
 const DEFAULT_BLOCK_SIZE: &str = "256";
@@ -44,12 +45,22 @@ pub struct MurmurConfig {
     #[builder(default = DEFAULT_TIMEOUT)]
     /// Timeout duration in seconds
     pub timeout: u64,
+
+    #[cfg_attr(feature = "structopt", structopt(long, short, default_value = DEFAULT_EXPIRATION_MINUTE))]
+    #[builder(default = DEFAULT_EXPIRATION_MINUTE)]
+    /// Delay for batch expiration in minutes
+    pub batch_expiration: u64,
 }
 
 impl MurmurConfig {
     /// Get the batch delay as a Duration
     pub fn batch_delay(&self) -> Duration {
         Duration::from_millis(self.batch_delay)
+    }
+
+    /// Get the delay to expunge completed batch from memory
+    pub fn batch_expiration(&self) -> Duration {
+        Duration::from_secs(self.batch_expiration * 60)
     }
 
     /// Get the timeout duration as a Duration
@@ -61,6 +72,7 @@ impl MurmurConfig {
 impl Default for MurmurConfig {
     fn default() -> Self {
         Self {
+            batch_expiration: DEFAULT_EXPIRATION_MINUTE.parse().unwrap(),
             channel_cap: DEFAULT_CHANNEL_CAP.parse().unwrap(),
             sponge_threshold: DEFAULT_SPONGE_THRESHOLD.parse().unwrap(),
             block_size: DEFAULT_BLOCK_SIZE.parse().unwrap(),

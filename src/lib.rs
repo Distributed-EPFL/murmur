@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use drop::async_trait;
 use drop::crypto::hash::Digest;
@@ -633,7 +633,10 @@ where
     }
 
     async fn garbage_collection(&self) {
-        todo!()
+        self.batches
+            .write()
+            .await
+            .retain(|_, batch| !batch.expired(self.config.batch_expiration()));
     }
 }
 
@@ -753,7 +756,7 @@ where
 
 #[derive(Clone)]
 enum State<M: Message> {
-    Complete(Arc<Batch<M>>),
+    Complete(Arc<Batch<M>>, Instant),
     Pending(Arc<BatchState<M>>),
 }
 
@@ -771,7 +774,7 @@ where
 
     fn info(&self) -> &BatchInfo {
         match self {
-            Self::Complete(batch) => batch.info(),
+            Self::Complete(batch, _) => batch.info(),
             Self::Pending(batch) => batch.info(),
         }
     }
@@ -779,7 +782,7 @@ where
     async fn get_block(&self, seq: Sequence) -> Option<Block<M>> {
         match self {
             Self::Pending(state) => state.get_sequence(seq).await,
-            Self::Complete(batch) => batch.get(seq),
+            Self::Complete(batch, _) => batch.get(seq),
         }
     }
 
@@ -792,7 +795,7 @@ where
                 if state.complete().await.is_ok() {
                     if let Ok(batch) = state.to_batch().await {
                         let batch = Arc::new(batch);
-                        *self = Self::Complete(batch.clone());
+                        *self = Self::Complete(batch.clone(), Instant::now());
                         Some(batch)
                     } else {
                         None
@@ -801,7 +804,14 @@ where
                     None
                 }
             }
-            Self::Complete(batch) => Some(batch.clone()),
+            Self::Complete(batch, _) => Some(batch.clone()),
+        }
+    }
+
+    fn expired(&self, expiration: Duration) -> bool {
+        match self {
+            Self::Complete(_, time) => Instant::now().duration_since(*time) >= expiration,
+            _ => false,
         }
     }
 
@@ -833,7 +843,7 @@ where
     M: Message + 'static,
 {
     fn from(batch: Arc<Batch<M>>) -> Self {
-        Self::Complete(batch)
+        Self::Complete(batch, Instant::now())
     }
 }
 
@@ -844,7 +854,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Pending(batch) => write!(f, "pending batch {}", batch.info().digest()),
-            Self::Complete(batch) => write!(f, "complete batch {}", batch.info().digest()),
+            Self::Complete(batch, _) => write!(f, "complete batch {}", batch.info().digest()),
         }
     }
 }
@@ -1291,6 +1301,36 @@ pub mod test {
             gossip.len(),
             keys.len() - 1,
             "have too many peers after disconnected"
+        );
+    }
+
+    #[tokio::test]
+    async fn garbage_collect() {
+        use drop::test::keyset;
+
+        let config = MurmurConfig {
+            batch_expiration: 0,
+            ..Default::default()
+        };
+        let keys = keyset(10);
+        let mut murmur = Murmur::<u32, _>::new(KeyPair::random(), Fixed::new_local(), config);
+        let batch = generate_batch(10);
+        let sender = Arc::new(CollectingSender::new(keys));
+        let sampler = Arc::new(AllSampler::default());
+
+        murmur.insert_batch(batch).await;
+
+        murmur.setup(sampler, sender).await;
+
+        // yes this is ugly, blame the type inferer
+        <Murmur<_, _> as Processor<_, _, _, CollectingSender<MurmurMessage<u32>>>>::garbage_collection(
+            &murmur,
+        )
+        .await;
+
+        assert!(
+            murmur.batches.read().await.is_empty(),
+            "garbage collection did not remove batch"
         );
     }
 }
