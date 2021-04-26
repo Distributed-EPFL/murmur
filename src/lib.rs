@@ -540,7 +540,7 @@ where
         Ok(())
     }
 
-    async fn output<SA: Sampler>(&mut self, sampler: Arc<SA>, sender: Arc<S>) -> Self::Handle {
+    async fn setup<SA: Sampler>(&mut self, sampler: Arc<SA>, sender: Arc<S>) -> Self::Handle {
         let keys = sender.keys().await;
         let sample = sampler
             .sample(keys.iter().copied(), self.config.murmur_gossip_size)
@@ -610,6 +610,30 @@ where
             sender,
             self.sponge.clone(),
         )
+    }
+
+    async fn disconnect<SA: Sampler>(&self, peer: PublicKey, sender: Arc<S>, sampler: Arc<SA>) {
+        if self.gossip.read().await.contains(&peer) {
+            debug!("peer {} from our gossip set was disconnected", peer);
+
+            let keys = sender.keys().await;
+            let mut gossip = self.gossip.write().await;
+
+            gossip.remove(&peer);
+
+            let not_in_gossip = keys.into_iter().filter(|x| !gossip.contains(&x));
+
+            // if the sampler fails we already have all known peers in our gossip set
+            if let Ok(new) = sampler.sample(not_in_gossip, 1).await {
+                debug!("resampled for {} new peers", new.len());
+
+                gossip.extend(new);
+            }
+        }
+    }
+
+    async fn garbage_collection(&self) {
+        todo!()
     }
 }
 
@@ -1236,5 +1260,37 @@ pub mod test {
             .into_iter()
             .any(|m| matches!(m.1, MurmurMessage::Announce(_, true)))
         {}
+    }
+
+    #[tokio::test]
+    async fn disconnection() {
+        use drop::test::keyset;
+
+        drop::test::init_logger();
+
+        let mut murmur = Murmur::<usize, _>::default();
+        let keys = keyset(10).collect::<Vec<_>>();
+        let sampler = Arc::new(AllSampler::default());
+        let sender = Arc::new(CollectingSender::new(keys.iter().copied()));
+
+        murmur.setup(sampler.clone(), sender).await;
+
+        assert_eq!(murmur.gossip.read().await.len(), keys.len());
+
+        let sender = Arc::new(CollectingSender::new(keys.iter().skip(1).copied()));
+
+        murmur.disconnect(keys[0], sender, sampler).await;
+
+        let gossip = murmur.gossip.read().await;
+
+        assert!(
+            !gossip.contains(&keys[0]),
+            "gossip still contains disconnected peer"
+        );
+        assert_eq!(
+            gossip.len(),
+            keys.len() - 1,
+            "have too many peers after disconnected"
+        );
     }
 }
