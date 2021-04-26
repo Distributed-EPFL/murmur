@@ -1306,21 +1306,14 @@ pub mod test {
 
     #[tokio::test]
     async fn garbage_collect() {
-        use drop::test::keyset;
-
         let config = MurmurConfig {
             batch_expiration: 0,
             ..Default::default()
         };
-        let keys = keyset(10);
-        let mut murmur = Murmur::<u32, _>::new(KeyPair::random(), Fixed::new_local(), config);
+        let murmur = Murmur::<u32, _>::new(KeyPair::random(), Fixed::new_local(), config);
         let batch = generate_batch(10);
-        let sender = Arc::new(CollectingSender::new(keys));
-        let sampler = Arc::new(AllSampler::default());
 
         murmur.insert_batch(batch).await;
-
-        murmur.setup(sampler, sender).await;
 
         // yes this is ugly, blame the type inferer
         <Murmur<_, _> as Processor<_, _, _, CollectingSender<MurmurMessage<u32>>>>::garbage_collection(
