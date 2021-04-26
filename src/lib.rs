@@ -227,7 +227,7 @@ where
     where
         S: Sender<MurmurMessage<M>>,
     {
-        let message = Arc::new(MurmurMessage::Announce(info, available));
+        let message = MurmurMessage::Announce(info, available);
 
         debug!(
             "announcing new batch {} of size {} to peers",
@@ -326,7 +326,7 @@ where
         );
 
         sender
-            .send_many(Arc::new(message), self.gossip.read().await.iter())
+            .send_many(message, self.gossip.read().await.iter())
             .await
             .context(Network)
     }
@@ -359,7 +359,7 @@ where
             self.providers.register_provider(id, from).await;
 
             if let Some(provider) = self.providers.best_provider(id).await {
-                let message = Arc::new(MurmurMessage::Pull(id));
+                let message = MurmurMessage::Pull(id);
 
                 debug!("pulling {} from {}", id, from);
 
@@ -431,10 +431,7 @@ where
 
                     let message = MurmurMessage::Transmit(info, blockid.sequence(), block);
 
-                    sender
-                        .send(Arc::new(message), &from)
-                        .await
-                        .context(Network)?;
+                    sender.send(message, &from).await.context(Network)?;
                 } else {
                     warn!(
                         "peer requested block {} from batch {} that we don't have yet",
@@ -534,10 +531,7 @@ where
                         let available = batch.available();
                         let message = MurmurMessage::Announce(*batch.info(), available);
 
-                        sender
-                            .send(Arc::new(message), &from)
-                            .await
-                            .context(Network)?;
+                        sender.send(message, &from).await.context(Network)?;
                     }
                 }
             }
@@ -561,10 +555,7 @@ where
         self.gossip.write().await.extend(sample);
 
         sender
-            .send_many(
-                Arc::new(MurmurMessage::Subscribe),
-                self.gossip.read().await.iter(),
-            )
+            .send_many(MurmurMessage::Subscribe, self.gossip.read().await.iter())
             .await
             .expect("subscription failed");
 
@@ -711,10 +702,7 @@ where
             RdvConfig::Remote { ref peer } => {
                 let message = payload.into();
 
-                self.sender
-                    .send(Arc::new(message), peer)
-                    .await
-                    .context(Network)
+                self.sender.send(message, peer).await.context(Network)
             }
         }
     }
@@ -948,7 +936,7 @@ pub mod test {
         let sender = Arc::new(CollectingSender::new(keys.clone()));
         let delivery = messages.into_iter().zip(keys.into_iter().cycle());
 
-        let _handle = murmur.output(sampler, sender.clone()).await;
+        let _handle = murmur.setup(sampler, sender.clone()).await;
 
         let murmur = Arc::new(murmur);
 
@@ -991,8 +979,8 @@ pub mod test {
             .messages()
             .await
             .into_iter()
-            .find_map(|msg| match msg.1.deref() {
-                MurmurMessage::Announce(info, true) => Some(*info),
+            .find_map(|msg| match msg.1 {
+                MurmurMessage::Announce(info, true) => Some(info),
                 _ => None,
             })
             .expect("no batch announced");
@@ -1028,7 +1016,7 @@ pub mod test {
 
         assert!(outgoing
             .iter()
-            .any(|msg| matches!(msg.1.deref(), &MurmurMessage::Announce(i, true) if info == i)));
+            .any(|msg| matches!(msg.1, MurmurMessage::Announce(i, true) if info == i)));
     }
 
     #[tokio::test]
@@ -1054,7 +1042,7 @@ pub mod test {
         for blockid in (0..info.sequence()).map(|seq| BlockId::new(*info.digest(), seq)) {
             let pulls = messages
                 .iter()
-                .filter(|msg| matches!(msg.1.deref(), &MurmurMessage::Pull(id) if blockid == id))
+                .filter(|msg| matches!(msg.1, MurmurMessage::Pull(id) if blockid == id))
                 .count();
 
             assert_eq!(
@@ -1066,7 +1054,7 @@ pub mod test {
 
         messages
             .iter()
-            .find(|msg| matches!(msg.1.deref(), &MurmurMessage::Announce(_, true)))
+            .find(|msg| matches!(msg.1, MurmurMessage::Announce(_, true)))
             .expect("did not announce completed batch");
     }
 
@@ -1092,7 +1080,7 @@ pub mod test {
             let sequence = block.sequence();
 
             assert!(sent.iter().any(
-                |(_, msg)| matches!(msg.deref(), &MurmurMessage::Transmit(i, s, _) if info == i && s == sequence)
+                |(_, msg)| matches!(msg, MurmurMessage::Transmit(i, s, _) if info == *i && *s == sequence)
             ), "missing transmit message for block");
         }
     }
@@ -1183,7 +1171,7 @@ pub mod test {
             .map(Arc::new);
         let messages = keys.clone().into_iter().cycle().zip(messages);
 
-        let mut handle = murmur.output(sampler, sender.clone()).await;
+        let mut handle = murmur.setup(sampler, sender.clone()).await;
 
         let murmur = Arc::new(murmur);
 
@@ -1231,7 +1219,7 @@ pub mod test {
         let sampler = Arc::new(AllSampler::default());
         let sender = Arc::new(CollectingSender::new(keys));
 
-        let mut handle = murmur.output(sampler, sender.clone()).await;
+        let mut handle = murmur.setup(sampler, sender.clone()).await;
 
         let message = 0usize;
         let source = *keypair.public();
@@ -1246,7 +1234,7 @@ pub mod test {
             .messages()
             .await
             .into_iter()
-            .any(|m| matches!(m.1.deref(), MurmurMessage::Announce(_, true)))
+            .any(|m| matches!(m.1, MurmurMessage::Announce(_, true)))
         {}
     }
 }
