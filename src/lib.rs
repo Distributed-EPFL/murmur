@@ -1326,4 +1326,27 @@ pub mod test {
             "garbage collection did not remove batch"
         );
     }
+
+    #[tokio::test]
+    async fn garbage_collect_early() {
+        let config = MurmurConfig {
+            batch_expiration: 5,
+            ..Default::default()
+        };
+        let murmur = Murmur::<u32, _>::new(KeyPair::random(), Fixed::new_local(), config);
+        let batch = generate_batch(10);
+
+        murmur.insert_batch(batch).await;
+
+        // yes this is ugly, blame the type inferer
+        <Murmur<_, _> as Processor<_, _, _, CollectingSender<MurmurMessage<u32>>>>::garbage_collection(
+            &murmur,
+        )
+        .await;
+
+        assert!(
+            !murmur.batches.read().await.is_empty(),
+            "garbage collection did not remove batch"
+        );
+    }
 }
