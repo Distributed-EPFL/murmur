@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use drop::async_trait;
 use drop::crypto::hash::Digest;
@@ -227,7 +227,7 @@ where
     where
         S: Sender<MurmurMessage<M>>,
     {
-        let message = Arc::new(MurmurMessage::Announce(info, available));
+        let message = MurmurMessage::Announce(info, available);
 
         debug!(
             "announcing new batch {} of size {} to peers",
@@ -326,7 +326,7 @@ where
         );
 
         sender
-            .send_many(Arc::new(message), self.gossip.read().await.iter())
+            .send_many(message, self.gossip.read().await.iter())
             .await
             .context(Network)
     }
@@ -359,7 +359,7 @@ where
             self.providers.register_provider(id, from).await;
 
             if let Some(provider) = self.providers.best_provider(id).await {
-                let message = Arc::new(MurmurMessage::Pull(id));
+                let message = MurmurMessage::Pull(id);
 
                 debug!("pulling {} from {}", id, from);
 
@@ -431,10 +431,7 @@ where
 
                     let message = MurmurMessage::Transmit(info, blockid.sequence(), block);
 
-                    sender
-                        .send(Arc::new(message), &from)
-                        .await
-                        .context(Network)?;
+                    sender.send(message, &from).await.context(Network)?;
                 } else {
                     warn!(
                         "peer requested block {} from batch {} that we don't have yet",
@@ -534,10 +531,7 @@ where
                         let available = batch.available();
                         let message = MurmurMessage::Announce(*batch.info(), available);
 
-                        sender
-                            .send(Arc::new(message), &from)
-                            .await
-                            .context(Network)?;
+                        sender.send(message, &from).await.context(Network)?;
                     }
                 }
             }
@@ -546,7 +540,7 @@ where
         Ok(())
     }
 
-    async fn output<SA: Sampler>(&mut self, sampler: Arc<SA>, sender: Arc<S>) -> Self::Handle {
+    async fn setup<SA: Sampler>(&mut self, sampler: Arc<SA>, sender: Arc<S>) -> Self::Handle {
         let keys = sender.keys().await;
         let sample = sampler
             .sample(keys.iter().copied(), self.config.murmur_gossip_size)
@@ -561,10 +555,7 @@ where
         self.gossip.write().await.extend(sample);
 
         sender
-            .send_many(
-                Arc::new(MurmurMessage::Subscribe),
-                self.gossip.read().await.iter(),
-            )
+            .send_many(MurmurMessage::Subscribe, self.gossip.read().await.iter())
             .await
             .expect("subscription failed");
 
@@ -619,6 +610,33 @@ where
             sender,
             self.sponge.clone(),
         )
+    }
+
+    async fn disconnect<SA: Sampler>(&self, peer: PublicKey, sender: Arc<S>, sampler: Arc<SA>) {
+        if self.gossip.read().await.contains(&peer) {
+            debug!("peer {} from our gossip set was disconnected", peer);
+
+            let keys = sender.keys().await;
+            let mut gossip = self.gossip.write().await;
+
+            gossip.remove(&peer);
+
+            let not_in_gossip = keys.into_iter().filter(|x| !gossip.contains(&x));
+
+            // if the sampler fails we already have all known peers in our gossip set
+            if let Ok(new) = sampler.sample(not_in_gossip, 1).await {
+                debug!("resampled for {} new peers", new.len());
+
+                gossip.extend(new);
+            }
+        }
+    }
+
+    async fn garbage_collection(&self) {
+        self.batches
+            .write()
+            .await
+            .retain(|_, batch| !batch.expired(self.config.batch_expiration()));
     }
 }
 
@@ -711,10 +729,7 @@ where
             RdvConfig::Remote { ref peer } => {
                 let message = payload.into();
 
-                self.sender
-                    .send(Arc::new(message), peer)
-                    .await
-                    .context(Network)
+                self.sender.send(message, peer).await.context(Network)
             }
         }
     }
@@ -741,7 +756,7 @@ where
 
 #[derive(Clone)]
 enum State<M: Message> {
-    Complete(Arc<Batch<M>>),
+    Complete(Arc<Batch<M>>, Instant),
     Pending(Arc<BatchState<M>>),
 }
 
@@ -759,7 +774,7 @@ where
 
     fn info(&self) -> &BatchInfo {
         match self {
-            Self::Complete(batch) => batch.info(),
+            Self::Complete(batch, _) => batch.info(),
             Self::Pending(batch) => batch.info(),
         }
     }
@@ -767,7 +782,7 @@ where
     async fn get_block(&self, seq: Sequence) -> Option<Block<M>> {
         match self {
             Self::Pending(state) => state.get_sequence(seq).await,
-            Self::Complete(batch) => batch.get(seq),
+            Self::Complete(batch, _) => batch.get(seq),
         }
     }
 
@@ -780,7 +795,7 @@ where
                 if state.complete().await.is_ok() {
                     if let Ok(batch) = state.to_batch().await {
                         let batch = Arc::new(batch);
-                        *self = Self::Complete(batch.clone());
+                        *self = Self::Complete(batch.clone(), Instant::now());
                         Some(batch)
                     } else {
                         None
@@ -789,7 +804,14 @@ where
                     None
                 }
             }
-            Self::Complete(batch) => Some(batch.clone()),
+            Self::Complete(batch, _) => Some(batch.clone()),
+        }
+    }
+
+    fn expired(&self, expiration: Duration) -> bool {
+        match self {
+            Self::Complete(_, time) => Instant::now().duration_since(*time) >= expiration,
+            _ => false,
         }
     }
 
@@ -821,7 +843,7 @@ where
     M: Message + 'static,
 {
     fn from(batch: Arc<Batch<M>>) -> Self {
-        Self::Complete(batch)
+        Self::Complete(batch, Instant::now())
     }
 }
 
@@ -832,7 +854,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Pending(batch) => write!(f, "pending batch {}", batch.info().digest()),
-            Self::Complete(batch) => write!(f, "complete batch {}", batch.info().digest()),
+            Self::Complete(batch, _) => write!(f, "complete batch {}", batch.info().digest()),
         }
     }
 }
@@ -948,7 +970,7 @@ pub mod test {
         let sender = Arc::new(CollectingSender::new(keys.clone()));
         let delivery = messages.into_iter().zip(keys.into_iter().cycle());
 
-        let _handle = murmur.output(sampler, sender.clone()).await;
+        let _handle = murmur.setup(sampler, sender.clone()).await;
 
         let murmur = Arc::new(murmur);
 
@@ -991,8 +1013,8 @@ pub mod test {
             .messages()
             .await
             .into_iter()
-            .find_map(|msg| match msg.1.deref() {
-                MurmurMessage::Announce(info, true) => Some(*info),
+            .find_map(|msg| match msg.1 {
+                MurmurMessage::Announce(info, true) => Some(info),
                 _ => None,
             })
             .expect("no batch announced");
@@ -1028,7 +1050,7 @@ pub mod test {
 
         assert!(outgoing
             .iter()
-            .any(|msg| matches!(msg.1.deref(), &MurmurMessage::Announce(i, true) if info == i)));
+            .any(|msg| matches!(msg.1, MurmurMessage::Announce(i, true) if info == i)));
     }
 
     #[tokio::test]
@@ -1054,7 +1076,7 @@ pub mod test {
         for blockid in (0..info.sequence()).map(|seq| BlockId::new(*info.digest(), seq)) {
             let pulls = messages
                 .iter()
-                .filter(|msg| matches!(msg.1.deref(), &MurmurMessage::Pull(id) if blockid == id))
+                .filter(|msg| matches!(msg.1, MurmurMessage::Pull(id) if blockid == id))
                 .count();
 
             assert_eq!(
@@ -1066,7 +1088,7 @@ pub mod test {
 
         messages
             .iter()
-            .find(|msg| matches!(msg.1.deref(), &MurmurMessage::Announce(_, true)))
+            .find(|msg| matches!(msg.1, MurmurMessage::Announce(_, true)))
             .expect("did not announce completed batch");
     }
 
@@ -1092,7 +1114,7 @@ pub mod test {
             let sequence = block.sequence();
 
             assert!(sent.iter().any(
-                |(_, msg)| matches!(msg.deref(), &MurmurMessage::Transmit(i, s, _) if info == i && s == sequence)
+                |(_, msg)| matches!(msg, MurmurMessage::Transmit(i, s, _) if info == *i && *s == sequence)
             ), "missing transmit message for block");
         }
     }
@@ -1183,7 +1205,7 @@ pub mod test {
             .map(Arc::new);
         let messages = keys.clone().into_iter().cycle().zip(messages);
 
-        let mut handle = murmur.output(sampler, sender.clone()).await;
+        let mut handle = murmur.setup(sampler, sender.clone()).await;
 
         let murmur = Arc::new(murmur);
 
@@ -1231,7 +1253,7 @@ pub mod test {
         let sampler = Arc::new(AllSampler::default());
         let sender = Arc::new(CollectingSender::new(keys));
 
-        let mut handle = murmur.output(sampler, sender.clone()).await;
+        let mut handle = murmur.setup(sampler, sender.clone()).await;
 
         let message = 0usize;
         let source = *keypair.public();
@@ -1246,7 +1268,79 @@ pub mod test {
             .messages()
             .await
             .into_iter()
-            .any(|m| matches!(m.1.deref(), MurmurMessage::Announce(_, true)))
+            .any(|m| matches!(m.1, MurmurMessage::Announce(_, true)))
         {}
+    }
+
+    #[tokio::test]
+    async fn disconnection() {
+        use drop::test::keyset;
+
+        drop::test::init_logger();
+
+        let mut murmur = Murmur::<usize, _>::default();
+        let keys = keyset(10).collect::<Vec<_>>();
+        let sampler = Arc::new(AllSampler::default());
+        let sender = Arc::new(CollectingSender::new(keys.iter().copied()));
+
+        murmur.setup(sampler.clone(), sender).await;
+
+        assert_eq!(murmur.gossip.read().await.len(), keys.len());
+
+        let sender = Arc::new(CollectingSender::new(keys.iter().skip(1).copied()));
+
+        murmur.disconnect(keys[0], sender, sampler).await;
+
+        let gossip = murmur.gossip.read().await;
+
+        assert!(
+            !gossip.contains(&keys[0]),
+            "gossip still contains disconnected peer"
+        );
+        assert_eq!(
+            gossip.len(),
+            keys.len() - 1,
+            "have too many peers after disconnected"
+        );
+    }
+
+    #[cfg(test)]
+    async fn garbage_test_helper(expiration_delay: u64) -> Murmur<u32, Fixed> {
+        let config = MurmurConfig {
+            batch_expiration: expiration_delay,
+            ..Default::default()
+        };
+        let murmur = Murmur::<u32, _>::new(KeyPair::random(), Fixed::new_local(), config);
+        let batch = generate_batch(10);
+
+        murmur.insert_batch(batch).await;
+
+        // yes this is ugly, blame the type inferer
+        <Murmur<_, _> as Processor<_, _, _, CollectingSender<MurmurMessage<u32>>>>::garbage_collection(
+            &murmur,
+        )
+            .await;
+
+        murmur
+    }
+
+    #[tokio::test]
+    async fn garbage_collect() {
+        let murmur = garbage_test_helper(0).await;
+
+        assert!(
+            murmur.batches.read().await.is_empty(),
+            "garbage collection did not remove batch"
+        );
+    }
+
+    #[tokio::test]
+    async fn garbage_collect_early() {
+        let murmur = garbage_test_helper(5).await;
+
+        assert!(
+            !murmur.batches.read().await.is_empty(),
+            "garbage collection removed batch too early"
+        );
     }
 }
