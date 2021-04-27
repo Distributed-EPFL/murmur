@@ -1304,10 +1304,10 @@ pub mod test {
         );
     }
 
-    #[tokio::test]
-    async fn garbage_collect() {
+    #[cfg(test)]
+    async fn garbage_test_helper(expiration_delay: u64) -> Murmur<u32, Fixed> {
         let config = MurmurConfig {
-            batch_expiration: 0,
+            batch_expiration: expiration_delay,
             ..Default::default()
         };
         let murmur = Murmur::<u32, _>::new(KeyPair::random(), Fixed::new_local(), config);
@@ -1319,7 +1319,14 @@ pub mod test {
         <Murmur<_, _> as Processor<_, _, _, CollectingSender<MurmurMessage<u32>>>>::garbage_collection(
             &murmur,
         )
-        .await;
+            .await;
+
+        murmur
+    }
+
+    #[tokio::test]
+    async fn garbage_collect() {
+        let murmur = garbage_test_helper(0).await;
 
         assert!(
             murmur.batches.read().await.is_empty(),
@@ -1329,24 +1336,11 @@ pub mod test {
 
     #[tokio::test]
     async fn garbage_collect_early() {
-        let config = MurmurConfig {
-            batch_expiration: 5,
-            ..Default::default()
-        };
-        let murmur = Murmur::<u32, _>::new(KeyPair::random(), Fixed::new_local(), config);
-        let batch = generate_batch(10);
-
-        murmur.insert_batch(batch).await;
-
-        // yes this is ugly, blame the type inferer
-        <Murmur<_, _> as Processor<_, _, _, CollectingSender<MurmurMessage<u32>>>>::garbage_collection(
-            &murmur,
-        )
-        .await;
+        let murmur = garbage_test_helper(5).await;
 
         assert!(
             !murmur.batches.read().await.is_empty(),
-            "garbage collection did not remove batch"
+            "garbage collection removed batch too early"
         );
     }
 }
