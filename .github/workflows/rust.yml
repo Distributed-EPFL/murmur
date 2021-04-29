@@ -38,6 +38,12 @@ jobs:
         name: cargo test
         with:
           command: test
+          
+      - uses: actions-rs/cargo@v1
+        name: build examples
+        with:
+          command: build
+          args: --examples
 
   deny:
     name: cargo deny
