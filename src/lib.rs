@@ -20,7 +20,6 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -386,14 +385,14 @@ where
 
     async fn process(
         &self,
-        message: Arc<MurmurMessage<M>>,
+        message: MurmurMessage<M>,
         from: PublicKey,
         sender: Arc<S>,
     ) -> Result<(), Self::Error> {
-        match message.deref() {
+        match message {
             MurmurMessage::Announce(info, has) => {
-                if *has {
-                    self.pull_missing_blocks(*info, 0..info.sequence(), from, sender)
+                if has {
+                    self.pull_missing_blocks(info, 0..info.sequence(), from, sender)
                         .await?;
                 }
             }
@@ -406,7 +405,7 @@ where
                     info
                 );
 
-                self.pull_missing_blocks(*info, blocks.iter().copied(), from, sender)
+                self.pull_missing_blocks(info, blocks.iter().copied(), from, sender)
                     .await?;
             }
 
@@ -418,7 +417,7 @@ where
                     from
                 );
 
-                if let Some(block) = self.get_block(blockid).await {
+                if let Some(block) = self.get_block(&blockid).await {
                     debug!(
                         "sending block {} of batch {} to {}",
                         blockid.sequence(),
@@ -447,7 +446,7 @@ where
                     return Ok(());
                 }
 
-                let blockid = BlockId::new(*info.digest(), *sequence);
+                let blockid = BlockId::new(*info.digest(), sequence);
 
                 self.providers.register_response(blockid, from).await;
 
@@ -469,9 +468,9 @@ where
 
                     if let Some(batch) = self.try_deliver(info.digest()).await? {
                         info!("batch {} is complete", info.digest());
-                        self.announce(*info, true, sender).await?;
+                        self.announce(info, true, sender).await?;
 
-                        self.providers.purge(*info).await;
+                        self.providers.purge(info).await;
 
                         self.delivery
                             .as_ref()
@@ -481,7 +480,7 @@ where
                             .await
                             .map_err(|_| Channel.build())?;
                     } else {
-                        self.advertise(*info, *sequence, sender.clone()).await?;
+                        self.advertise(info, sequence, sender.clone()).await?;
                     }
                 }
             }
@@ -491,7 +490,7 @@ where
                     .verify(&self.keypair)
                     .context(InvalidBlock { from })?;
 
-                if let Some(batch) = self.sponge.collect(payload.clone()).await {
+                if let Some(batch) = self.sponge.collect(payload).await {
                     let info = *batch.info();
 
                     self.insert_batch(batch).await;
@@ -981,7 +980,7 @@ pub mod test {
 
                 tokio::task::spawn(async move {
                     murmur
-                        .process(Arc::new(message), from, sender)
+                        .process(message, from, sender)
                         .await
                         .expect("processing failed")
                 })
@@ -1142,7 +1141,7 @@ pub mod test {
 
         let announce = msg
             .into_iter()
-            .filter(|msg| matches!(msg.deref(), &MurmurMessage::Announce(_, true)))
+            .filter(|msg| matches!(msg, MurmurMessage::Announce(_, true)))
             .count();
 
         assert_eq!(
@@ -1152,7 +1151,7 @@ pub mod test {
         );
 
         assert_eq!(
-            dest.difference(murmur.gossip.read().await.deref()).count(),
+            dest.difference(&*murmur.gossip.read().await).count(),
             0,
             "did not announce to every subscribers"
         );
@@ -1201,8 +1200,7 @@ pub mod test {
         let announce = MurmurMessage::Announce(*batch.info(), true);
         let messages = iter::once(announce.clone())
             .chain(generate_transmit(batch))
-            .chain(iter::once(announce))
-            .map(Arc::new);
+            .chain(iter::once(announce));
         let messages = keys.clone().into_iter().cycle().zip(messages);
 
         let mut handle = murmur.setup(sampler, sender.clone()).await;
