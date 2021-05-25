@@ -1,0 +1,26 @@
+on:
+  schedule:
+    - cron: "0 0 * * *"
+
+name: Regular build
+
+jobs:
+  build:
+    name: build stack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - uses: actions-rs/toolchain@v1
+        name: install toolchain
+        with:
+          profile: minimal
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@v1
+        name: caching
+
+      - uses: actions-rs/cargo@v1
+        name: cargo build
+        with:
+          command: build
