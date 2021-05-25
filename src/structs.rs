@@ -377,6 +377,18 @@ impl<M: Message> Payload<M> {
     }
 }
 
+impl<M> PartialEq for Payload<M>
+where
+    M: Message + PartialEq + Eq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.sender == other.sender
+            && self.sequence == other.sequence
+            && self.payload == other.payload
+            && self.signature == other.signature
+    }
+}
+
 pub struct Sponge<M> {
     payloads: Vec<Payload<M>>,
 }
