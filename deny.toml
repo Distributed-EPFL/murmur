@@ -194,3 +194,6 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # List of URLs for allowed Git repositories
 allow-git = []
 
+[sources.allow-org]
+# 1 or more github.com organizations to allow git sources for
+github = ["Distributed-EPFL"]
