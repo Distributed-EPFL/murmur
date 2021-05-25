@@ -27,8 +27,7 @@ use drop::async_trait;
 use drop::crypto::hash::Digest;
 use drop::crypto::key::exchange::PublicKey;
 use drop::crypto::sign::{KeyPair, SignError, VerifyError};
-use drop::system::manager::Handle;
-use drop::system::{message, Message, Processor, Sampler, Sender, SenderError};
+use drop::system::{message, Handle, Message, Processor, Sampler, Sender, SenderError};
 
 use futures::future::OptionFuture;
 
@@ -870,8 +869,8 @@ pub mod test {
 
     pub use super::sync::test::*;
 
-    use drop::system::sampler::AllSampler;
-    use drop::system::sender::CollectingSender;
+    use drop::system::AllSampler;
+    use drop::system::CollectingSender;
 
     use lazy_static::lazy_static;
 
@@ -1185,7 +1184,7 @@ pub mod test {
 
     #[tokio::test]
     async fn deliver_then_announce() {
-        use drop::system::sampler::AllSampler;
+        use drop::system::AllSampler;
         use drop::test::keyset;
 
         use futures::stream::{FuturesUnordered, StreamExt};

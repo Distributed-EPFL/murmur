@@ -24,7 +24,7 @@ postage = "0.4"
 drop = { git = "https://github.com/Distributed-EPFL/drop", features = [ "test" ] }
 lazy_static = "1.4"
 snafu = { version = "0.6", features = [ "backtraces" ] }
-tokio = { version = "1", features = [ "rt-multi-thread" ] }
+tokio = { version = "1", features = [ "rt-multi-thread", "macros" ] }
 
 [features]
 default = []

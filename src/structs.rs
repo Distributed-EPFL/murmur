@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) type Sequence = u32;
 
 #[message]
-#[derive(Copy)]
+#[derive(Copy, PartialEq, Eq, Hash)]
 /// A structure that uniquely identifies a `Block`
 pub struct BlockId {
     digest: Digest,
@@ -55,7 +55,7 @@ impl fmt::Display for BlockId {
 
 /// Information about a `Batch`
 #[message]
-#[derive(Copy)]
+#[derive(Copy, Eq, PartialEq, Hash)]
 pub struct BatchInfo {
     size: Sequence,
     digest: Digest,
@@ -296,6 +296,14 @@ impl<M: Message> Ord for Block<M> {
         self.sequence.cmp(&other.sequence)
     }
 }
+
+impl<M: Message> PartialEq for Block<M> {
+    fn eq(&self, other: &Self) -> bool {
+        self.sequence == other.sequence
+    }
+}
+
+impl<M: Message> Eq for Block<M> {}
 
 impl<M: Message> IntoIterator for Block<M> {
     type Item = Payload<M>;
