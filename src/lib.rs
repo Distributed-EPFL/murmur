@@ -867,477 +867,492 @@ pub mod test {
 
     use std::iter;
 
-    pub use super::sync::test::*;
-
     use drop::system::AllSampler;
     use drop::system::CollectingSender;
 
-    use lazy_static::lazy_static;
+    pub use super::sync::test::*;
 
-    #[allow(dead_code)]
-    lazy_static! {
-        static ref SIZE: usize = MurmurConfig::default().block_size * 10;
-        static ref DEFAULT_SPONGE_THRESHOLD: usize = MurmurConfig::default().sponge_threshold;
-        static ref DEFAULT_BLOCK_SIZE: usize = MurmurConfig::default().block_size;
-    }
+    #[cfg(any(feature = "test", test))]
+    pub use utils::*;
 
-    fn generate_sequence<M, F>(count: usize, generator: F) -> impl Iterator<Item = MurmurMessage<M>>
-    where
-        M: Message,
-        F: FnMut(usize) -> MurmurMessage<M>,
-    {
-        (0..count).map(generator)
-    }
+    #[cfg(any(feature = "test", test))]
+    mod utils {
+        use super::*;
 
-    /// Generate a sequence of `Collect` messages
-    pub fn generate_collect<M, F>(
-        count: usize,
-        generator: F,
-    ) -> impl Iterator<Item = MurmurMessage<M>>
-    where
-        M: Message,
-        F: Fn(usize) -> M,
-    {
-        use drop::crypto::sign::Signer;
+        fn generate_sequence<M, F>(
+            count: usize,
+            generator: F,
+        ) -> impl Iterator<Item = MurmurMessage<M>>
+        where
+            M: Message,
+            F: FnMut(usize) -> MurmurMessage<M>,
+        {
+            (0..count).map(generator)
+        }
 
-        generate_sequence(count, move |x| {
-            let mut signer = Signer::random();
-            let source = *signer.public();
+        /// Generate a sequence of `Collect` messages
+        pub fn generate_collect<M, F>(
+            count: usize,
+            generator: F,
+        ) -> impl Iterator<Item = MurmurMessage<M>>
+        where
+            M: Message,
+            F: Fn(usize) -> M,
+        {
+            use drop::crypto::sign::Signer;
 
-            let content = (generator)(x);
-            let signature = signer.sign(&content).expect("sign failed");
+            generate_sequence(count, move |x| {
+                let mut signer = Signer::random();
+                let source = *signer.public();
 
-            let payload = Payload::new(source, x as Sequence, content, signature);
+                let content = (generator)(x);
+                let signature = signer.sign(&content).expect("sign failed");
 
-            MurmurMessage::Collect(payload)
-        })
-    }
+                let payload = Payload::new(source, x as Sequence, content, signature);
 
-    /// Generate a sequence of `Pull` messages for the entirety of the provided `Batch`
-    pub fn generate_pull<M>(batch: &Batch<M>) -> impl Iterator<Item = MurmurMessage<M>> + '_
-    where
-        M: Message,
-    {
-        let size = batch.blocks().count();
-        let digest = *batch.info().digest();
+                MurmurMessage::Collect(payload)
+            })
+        }
 
-        generate_sequence(size, move |x| {
-            let block = batch.blocks().nth(x).unwrap();
-            let seq = block.sequence();
-            let digest = digest;
-            let id = BlockId::new(digest, seq);
+        /// Generate a sequence of `Pull` messages for the entirety of the provided `Batch`
+        pub fn generate_pull<M>(batch: &Batch<M>) -> impl Iterator<Item = MurmurMessage<M>> + '_
+        where
+            M: Message,
+        {
+            let size = batch.blocks().count();
+            let digest = *batch.info().digest();
 
-            MurmurMessage::Pull(id)
-        })
-    }
+            generate_sequence(size, move |x| {
+                let block = batch.blocks().nth(x).unwrap();
+                let seq = block.sequence();
+                let digest = digest;
+                let id = BlockId::new(digest, seq);
 
-    /// Generate a sequence of `Transmit` messages that contains the whole `Batch`
-    pub fn generate_transmit<M>(batch: Batch<M>) -> impl Iterator<Item = MurmurMessage<M>>
-    where
-        M: Message,
-    {
-        let info = *batch.info();
-        let size = batch.blocks().count();
-        let mut blocks = batch.into_blocks();
+                MurmurMessage::Pull(id)
+            })
+        }
 
-        generate_sequence(size, move |_| {
-            let block = blocks.next().expect("invalid batch size");
-            let sequence = block.sequence();
+        /// Generate a sequence of `Transmit` messages that contains the whole `Batch`
+        pub fn generate_transmit<M>(batch: Batch<M>) -> impl Iterator<Item = MurmurMessage<M>>
+        where
+            M: Message,
+        {
+            let info = *batch.info();
+            let size = batch.blocks().count();
+            let mut blocks = batch.into_blocks();
 
-            MurmurMessage::Transmit(info, sequence, block)
-        })
-    }
+            generate_sequence(size, move |_| {
+                let block = blocks.next().expect("invalid batch size");
+                let sequence = block.sequence();
 
-    /// Run the select processor as if all messages in the message `Iterator` were received from
-    /// the network using the keys in the keys `Iterator` in a cycle as sources.
-    pub async fn run<M, R, I1, I2>(
-        mut murmur: Murmur<M, R>,
-        messages: I1,
-        keys: I2,
-    ) -> (Arc<Murmur<M, R>>, Arc<CollectingSender<MurmurMessage<M>>>)
-    where
-        M: Message + 'static,
-        R: RdvPolicy + 'static,
-        I1: IntoIterator<Item = MurmurMessage<M>>,
-        I2: IntoIterator<Item = PublicKey> + Clone,
-        I2::IntoIter: Clone,
-    {
-        use futures::stream::{FuturesUnordered, StreamExt};
+                MurmurMessage::Transmit(info, sequence, block)
+            })
+        }
 
-        let sampler = Arc::new(AllSampler::default());
-        let sender = Arc::new(CollectingSender::new(keys.clone()));
-        let delivery = messages.into_iter().zip(keys.into_iter().cycle());
+        /// Run the select processor as if all messages in the message `Iterator` were received from
+        /// the network using the keys in the keys `Iterator` in a cycle as sources.
+        pub async fn run<M, R, I1, I2>(
+            mut murmur: Murmur<M, R>,
+            messages: I1,
+            keys: I2,
+        ) -> (Arc<Murmur<M, R>>, Arc<CollectingSender<MurmurMessage<M>>>)
+        where
+            M: Message + 'static,
+            R: RdvPolicy + 'static,
+            I1: IntoIterator<Item = MurmurMessage<M>>,
+            I2: IntoIterator<Item = PublicKey> + Clone,
+            I2::IntoIter: Clone,
+        {
+            use futures::stream::{FuturesUnordered, StreamExt};
 
-        let _handle = murmur.setup(sampler, sender.clone()).await;
+            let sampler = Arc::new(AllSampler::default());
+            let sender = Arc::new(CollectingSender::new(keys.clone()));
+            let delivery = messages.into_iter().zip(keys.into_iter().cycle());
 
-        let murmur = Arc::new(murmur);
+            let _handle = murmur.setup(sampler, sender.clone()).await;
 
-        let futures: FuturesUnordered<_> = iter::repeat(murmur.clone())
-            .zip(delivery)
-            .map(|(murmur, (message, from))| {
-                let sender = sender.clone();
+            let murmur = Arc::new(murmur);
 
-                tokio::task::spawn(async move {
-                    murmur
-                        .process(message, from, sender)
-                        .await
-                        .expect("processing failed")
+            let futures: FuturesUnordered<_> = iter::repeat(murmur.clone())
+                .zip(delivery)
+                .map(|(murmur, (message, from))| {
+                    let sender = sender.clone();
+
+                    tokio::task::spawn(async move {
+                        murmur
+                            .process(message, from, sender)
+                            .await
+                            .expect("processing failed")
+                    })
                 })
-            })
-            .collect();
+                .collect();
 
-        futures.map(Result::unwrap).collect::<Vec<_>>().await;
+            futures.map(Result::unwrap).collect::<Vec<_>>().await;
 
-        (murmur, sender)
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn sponge_fill() {
-        use drop::test::keyset;
-
-        drop::test::init_logger();
-
-        let config = MurmurConfig {
-            batch_delay: 200 * 1000,
-            ..Default::default()
-        };
-        let murmur = Murmur::new(KeyPair::random(), Fixed::new_local(), config);
-        let peers = keyset(50);
-        let payloads = generate_collect(config.sponge_threshold + 1, |x| x * 2);
-
-        let (_, sender) = run(murmur, payloads, peers).await;
-
-        let announce = sender
-            .messages()
-            .await
-            .into_iter()
-            .find_map(|msg| match msg.1 {
-                MurmurMessage::Announce(info, true) => Some(info),
-                _ => None,
-            })
-            .expect("no batch announced");
-
-        assert_eq!(announce.size(), config.sponge_threshold);
-    }
-
-    #[tokio::test]
-    async fn batch_announce() {
-        use drop::test::keyset;
-
-        drop::test::init_logger();
-
-        let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
-        let info = *batch.info();
-        let announce = MurmurMessage::Announce(*batch.info(), true);
-        let messages = iter::once(announce).chain(generate_transmit(batch));
-        let keys: Vec<_> = keyset(*SIZE / 100).collect();
-        let murmur = Murmur::default();
-
-        let (murmur, sender) = run(murmur, messages, keys).await;
-
-        murmur
-            .batches
-            .read()
-            .await
-            .get(info.digest())
-            .expect("no complete batch registered");
-
-        let outgoing = sender.messages().await;
-
-        assert!(outgoing.len() >= 2, "not enough messages sent");
-
-        assert!(outgoing
-            .iter()
-            .any(|msg| matches!(msg.1, MurmurMessage::Announce(i, true) if info == i)));
-    }
-
-    #[tokio::test]
-    async fn multiple_block_sources() {
-        use drop::test::keyset;
-
-        drop::test::init_logger();
-
-        let peer_count = *SIZE / 100;
-
-        let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
-        let info = *batch.info();
-        let announce = MurmurMessage::Announce(*batch.info(), true);
-        let messages = iter::repeat(announce.clone())
-            .take(peer_count)
-            .chain(generate_transmit(batch));
-        let keys: Vec<_> = keyset(peer_count).collect();
-        let murmur = Murmur::default();
-
-        let (_, sender) = run(murmur, messages, keys).await;
-        let messages = sender.messages().await;
-
-        for blockid in (0..info.sequence()).map(|seq| BlockId::new(*info.digest(), seq)) {
-            let pulls = messages
-                .iter()
-                .filter(|msg| matches!(msg.1, MurmurMessage::Pull(id) if blockid == id))
-                .count();
-
-            assert_eq!(
-                pulls, 1,
-                "{} pulled more than once without timeout",
-                blockid
-            );
+            (murmur, sender)
         }
-
-        messages
-            .iter()
-            .find(|msg| matches!(msg.1, MurmurMessage::Announce(_, true)))
-            .expect("did not announce completed batch");
-    }
-
-    #[tokio::test]
-    async fn block_pulling() {
-        use drop::test::keyset;
-
-        drop::test::init_logger();
-
-        let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
-        let info = *batch.info();
-        let pulls = generate_pull(&batch);
-        let murmur = Murmur::default();
-        let keys: Vec<_> = keyset(*SIZE / 100).collect();
-
-        murmur.insert_batch(batch.clone()).await;
-
-        let (_, sender) = run(murmur, pulls, keys).await;
-
-        let sent = sender.messages().await;
-
-        for block in batch.blocks() {
-            let sequence = block.sequence();
-
-            assert!(sent.iter().any(
-                |(_, msg)| matches!(msg, MurmurMessage::Transmit(i, s, _) if info == *i && *s == sequence)
-            ), "missing transmit message for block");
-        }
-    }
-
-    #[tokio::test]
-    async fn subscribe_announces_batch() {
-        use drop::test::keyset;
-
-        static SUBSCRIBERS: usize = 10;
-        drop::test::init_logger();
-
-        let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
-        let murmur = Murmur::default();
-        let keys: Vec<_> = keyset(50).collect();
-
-        murmur.insert_batch(batch).await;
-
-        let messages = iter::repeat(MurmurMessage::Subscribe).take(SUBSCRIBERS);
-
-        let (murmur, sender) = run(murmur, messages, keys.clone()).await;
-
-        let sent = sender.messages().await;
-
-        let (dest, msg): (HashSet<_>, Vec<_>) = sent.into_iter().unzip();
-
-        let announce = msg
-            .into_iter()
-            .filter(|msg| matches!(msg, MurmurMessage::Announce(_, true)))
-            .count();
-
-        assert_eq!(
-            announce,
-            keys.len(),
-            "did not announce batch to new subscribers"
-        );
-
-        assert_eq!(
-            dest.difference(&*murmur.gossip.read().await).count(),
-            0,
-            "did not announce to every subscribers"
-        );
-    }
-
-    #[tokio::test]
-    async fn handle_delivery() {
-        use drop::test::{keyset, DummyManager};
-
-        drop::test::init_logger();
-
-        let keypair = KeyPair::random();
-        let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
-        let info = *batch.info();
-        let murmur = Murmur::default();
-        let keys: Vec<_> = keyset(50).collect();
-        let announce = MurmurMessage::Announce(*batch.info(), true);
-        let messages =
-            iter::repeat(keys[0]).zip(iter::once(announce).chain(generate_transmit(batch)));
-        let mut manager = DummyManager::with_key(messages, keys);
-
-        let mut handle = manager.run(murmur).await;
-
-        let recv: Arc<Batch<u32>> = handle.deliver().await.expect("deliver failed");
-
-        assert_eq!(recv.info(), &info, "delivered batch has different metadata");
-
-        recv.blocks()
-            .for_each(|block| block.verify(&keypair).expect("invalid block"));
-    }
-
-    #[tokio::test]
-    async fn deliver_then_announce() {
-        use drop::system::AllSampler;
-        use drop::test::keyset;
-
-        use futures::stream::{FuturesUnordered, StreamExt};
-
-        drop::test::init_logger();
-
-        let keys: Vec<_> = keyset(*SIZE).collect();
-        let sender = Arc::new(CollectingSender::new(keys.iter().copied()));
-        let sampler = Arc::new(AllSampler::default());
-        let batch = generate_batch(1);
-        let mut murmur = Murmur::default();
-        let announce = MurmurMessage::Announce(*batch.info(), true);
-        let messages = iter::once(announce.clone())
-            .chain(generate_transmit(batch))
-            .chain(iter::once(announce));
-        let messages = keys.clone().into_iter().cycle().zip(messages);
-
-        let mut handle = murmur.setup(sampler, sender.clone()).await;
-
-        let murmur = Arc::new(murmur);
-
-        let futures: FuturesUnordered<_> = iter::repeat((murmur.clone(), sender))
-            .zip(messages)
-            .map(|((murmur, sender), (from, msg))| async move {
-                murmur.process(msg, from, sender).await
-            })
-            .collect();
-
-        futures
-            .collect::<Vec<_>>()
-            .await
-            .into_iter()
-            .for_each(|x| x.expect("processing failed"));
-
-        handle.deliver().await.expect("delivery failed");
-
-        let batches = murmur.batches.read().await;
-
-        assert_eq!(batches.len(), 1, "batch was unregistered after delivery");
-        assert!(
-            batches.values().all(State::is_complete),
-            "batch was not set as complete"
-        );
-    }
-
-    #[tokio::test]
-    async fn broadcast_eventually_announces() {
-        use drop::crypto::sign::Signer;
-        use drop::test::keyset;
-
-        const PEERS: usize = 10;
-
-        drop::test::init_logger();
-
-        let keypair = KeyPair::random();
-        let config = MurmurConfig {
-            batch_delay: 10,
-            ..Default::default()
-        };
-
-        let keys = keyset(PEERS);
-        let mut murmur = Murmur::new(keypair.clone(), Fixed::new_local(), config);
-        let sampler = Arc::new(AllSampler::default());
-        let sender = Arc::new(CollectingSender::new(keys));
-
-        let mut handle = murmur.setup(sampler, sender.clone()).await;
-
-        let message = 0usize;
-        let source = *keypair.public();
-        let signature = Signer::new(keypair).sign(&message).expect("sign failed");
-
-        let payload = Payload::new(source, 0, 0usize, signature);
-
-        handle.broadcast(&payload).await.expect("broadcast failed");
-
-        // loop while waiting for batch_delay to expire
-        while !sender
-            .messages()
-            .await
-            .into_iter()
-            .any(|m| matches!(m.1, MurmurMessage::Announce(_, true)))
-        {}
-    }
-
-    #[tokio::test]
-    async fn disconnection() {
-        use drop::test::keyset;
-
-        drop::test::init_logger();
-
-        let mut murmur = Murmur::<usize, _>::default();
-        let keys = keyset(10).collect::<Vec<_>>();
-        let sampler = Arc::new(AllSampler::default());
-        let sender = Arc::new(CollectingSender::new(keys.iter().copied()));
-
-        murmur.setup(sampler.clone(), sender).await;
-
-        assert_eq!(murmur.gossip.read().await.len(), keys.len());
-
-        let sender = Arc::new(CollectingSender::new(keys.iter().skip(1).copied()));
-
-        murmur.disconnect(keys[0], sender, sampler).await;
-
-        let gossip = murmur.gossip.read().await;
-
-        assert!(
-            !gossip.contains(&keys[0]),
-            "gossip still contains disconnected peer"
-        );
-        assert_eq!(
-            gossip.len(),
-            keys.len() - 1,
-            "have too many peers after disconnected"
-        );
     }
 
     #[cfg(test)]
-    async fn garbage_test_helper(expiration_delay: u64) -> Murmur<u32, Fixed> {
-        let config = MurmurConfig {
-            batch_expiration: expiration_delay,
-            ..Default::default()
-        };
-        let murmur = Murmur::<u32, _>::new(KeyPair::random(), Fixed::new_local(), config);
-        let batch = generate_batch(10);
+    mod tests {
+        use super::*;
 
-        murmur.insert_batch(batch).await;
+        use lazy_static::lazy_static;
 
-        // yes this is ugly, blame the type inferer
-        <Murmur<_, _> as Processor<_, _, _, CollectingSender<MurmurMessage<u32>>>>::garbage_collection(
+        lazy_static! {
+            static ref SIZE: usize = MurmurConfig::default().block_size * 10;
+            static ref DEFAULT_SPONGE_THRESHOLD: usize = MurmurConfig::default().sponge_threshold;
+            static ref DEFAULT_BLOCK_SIZE: usize = MurmurConfig::default().block_size;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn sponge_fill() {
+            use drop::test::keyset;
+
+            drop::test::init_logger();
+
+            let config = MurmurConfig {
+                batch_delay: 200 * 1000,
+                ..Default::default()
+            };
+            let murmur = Murmur::new(KeyPair::random(), Fixed::new_local(), config);
+            let peers = keyset(50);
+            let payloads = generate_collect(config.sponge_threshold + 1, |x| x * 2);
+
+            let (_, sender) = run(murmur, payloads, peers).await;
+
+            let announce = sender
+                .messages()
+                .await
+                .into_iter()
+                .find_map(|msg| match msg.1 {
+                    MurmurMessage::Announce(info, true) => Some(info),
+                    _ => None,
+                })
+                .expect("no batch announced");
+
+            assert_eq!(announce.size(), config.sponge_threshold);
+        }
+
+        #[tokio::test]
+        async fn batch_announce() {
+            use drop::test::keyset;
+
+            drop::test::init_logger();
+
+            let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
+            let info = *batch.info();
+            let announce = MurmurMessage::Announce(*batch.info(), true);
+            let messages = iter::once(announce).chain(generate_transmit(batch));
+            let keys: Vec<_> = keyset(*SIZE / 100).collect();
+            let murmur = Murmur::default();
+
+            let (murmur, sender) = run(murmur, messages, keys).await;
+
+            murmur
+                .batches
+                .read()
+                .await
+                .get(info.digest())
+                .expect("no complete batch registered");
+
+            let outgoing = sender.messages().await;
+
+            assert!(outgoing.len() >= 2, "not enough messages sent");
+
+            assert!(outgoing
+                .iter()
+                .any(|msg| matches!(msg.1, MurmurMessage::Announce(i, true) if info == i)));
+        }
+
+        #[tokio::test]
+        async fn multiple_block_sources() {
+            use drop::test::keyset;
+
+            drop::test::init_logger();
+
+            let peer_count = *SIZE / 100;
+
+            let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
+            let info = *batch.info();
+            let announce = MurmurMessage::Announce(*batch.info(), true);
+            let messages = iter::repeat(announce.clone())
+                .take(peer_count)
+                .chain(generate_transmit(batch));
+            let keys: Vec<_> = keyset(peer_count).collect();
+            let murmur = Murmur::default();
+
+            let (_, sender) = run(murmur, messages, keys).await;
+            let messages = sender.messages().await;
+
+            for blockid in (0..info.sequence()).map(|seq| BlockId::new(*info.digest(), seq)) {
+                let pulls = messages
+                    .iter()
+                    .filter(|msg| matches!(msg.1, MurmurMessage::Pull(id) if blockid == id))
+                    .count();
+
+                assert_eq!(
+                    pulls, 1,
+                    "{} pulled more than once without timeout",
+                    blockid
+                );
+            }
+
+            messages
+                .iter()
+                .find(|msg| matches!(msg.1, MurmurMessage::Announce(_, true)))
+                .expect("did not announce completed batch");
+        }
+
+        #[tokio::test]
+        async fn block_pulling() {
+            use drop::test::keyset;
+
+            drop::test::init_logger();
+
+            let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
+            let info = *batch.info();
+            let pulls = generate_pull(&batch);
+            let murmur = Murmur::default();
+            let keys: Vec<_> = keyset(*SIZE / 100).collect();
+
+            murmur.insert_batch(batch.clone()).await;
+
+            let (_, sender) = run(murmur, pulls, keys).await;
+
+            let sent = sender.messages().await;
+
+            for block in batch.blocks() {
+                let sequence = block.sequence();
+
+                assert!(sent.iter().any(
+                |(_, msg)| matches!(msg, MurmurMessage::Transmit(i, s, _) if info == *i && *s == sequence)
+            ), "missing transmit message for block");
+            }
+        }
+
+        #[tokio::test]
+        async fn subscribe_announces_batch() {
+            use drop::test::keyset;
+
+            static SUBSCRIBERS: usize = 10;
+            drop::test::init_logger();
+
+            let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
+            let murmur = Murmur::default();
+            let keys: Vec<_> = keyset(50).collect();
+
+            murmur.insert_batch(batch).await;
+
+            let messages = iter::repeat(MurmurMessage::Subscribe).take(SUBSCRIBERS);
+
+            let (murmur, sender) = run(murmur, messages, keys.clone()).await;
+
+            let sent = sender.messages().await;
+
+            let (dest, msg): (HashSet<_>, Vec<_>) = sent.into_iter().unzip();
+
+            let announce = msg
+                .into_iter()
+                .filter(|msg| matches!(msg, MurmurMessage::Announce(_, true)))
+                .count();
+
+            assert_eq!(
+                announce,
+                keys.len(),
+                "did not announce batch to new subscribers"
+            );
+
+            assert_eq!(
+                dest.difference(&*murmur.gossip.read().await).count(),
+                0,
+                "did not announce to every subscribers"
+            );
+        }
+
+        #[tokio::test]
+        async fn handle_delivery() {
+            use drop::test::{keyset, DummyManager};
+
+            drop::test::init_logger();
+
+            let keypair = KeyPair::random();
+            let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
+            let info = *batch.info();
+            let murmur = Murmur::default();
+            let keys: Vec<_> = keyset(50).collect();
+            let announce = MurmurMessage::Announce(*batch.info(), true);
+            let messages =
+                iter::repeat(keys[0]).zip(iter::once(announce).chain(generate_transmit(batch)));
+            let mut manager = DummyManager::with_key(messages, keys);
+
+            let mut handle = manager.run(murmur).await;
+
+            let recv: Arc<Batch<u32>> = handle.deliver().await.expect("deliver failed");
+
+            assert_eq!(recv.info(), &info, "delivered batch has different metadata");
+
+            recv.blocks()
+                .for_each(|block| block.verify(&keypair).expect("invalid block"));
+        }
+
+        #[tokio::test]
+        async fn deliver_then_announce() {
+            use drop::system::AllSampler;
+            use drop::test::keyset;
+
+            use futures::stream::{FuturesUnordered, StreamExt};
+
+            drop::test::init_logger();
+
+            let keys: Vec<_> = keyset(*SIZE).collect();
+            let sender = Arc::new(CollectingSender::new(keys.iter().copied()));
+            let sampler = Arc::new(AllSampler::default());
+            let batch = generate_batch(1);
+            let mut murmur = Murmur::default();
+            let announce = MurmurMessage::Announce(*batch.info(), true);
+            let messages = iter::once(announce.clone())
+                .chain(generate_transmit(batch))
+                .chain(iter::once(announce));
+            let messages = keys.clone().into_iter().cycle().zip(messages);
+
+            let mut handle = murmur.setup(sampler, sender.clone()).await;
+
+            let murmur = Arc::new(murmur);
+
+            let futures: FuturesUnordered<_> = iter::repeat((murmur.clone(), sender))
+                .zip(messages)
+                .map(|((murmur, sender), (from, msg))| async move {
+                    murmur.process(msg, from, sender).await
+                })
+                .collect();
+
+            futures
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .for_each(|x| x.expect("processing failed"));
+
+            handle.deliver().await.expect("delivery failed");
+
+            let batches = murmur.batches.read().await;
+
+            assert_eq!(batches.len(), 1, "batch was unregistered after delivery");
+            assert!(
+                batches.values().all(State::is_complete),
+                "batch was not set as complete"
+            );
+        }
+
+        #[tokio::test]
+        async fn broadcast_eventually_announces() {
+            use drop::crypto::sign::Signer;
+            use drop::test::keyset;
+
+            const PEERS: usize = 10;
+
+            drop::test::init_logger();
+
+            let keypair = KeyPair::random();
+            let config = MurmurConfig {
+                batch_delay: 10,
+                ..Default::default()
+            };
+
+            let keys = keyset(PEERS);
+            let mut murmur = Murmur::new(keypair.clone(), Fixed::new_local(), config);
+            let sampler = Arc::new(AllSampler::default());
+            let sender = Arc::new(CollectingSender::new(keys));
+
+            let mut handle = murmur.setup(sampler, sender.clone()).await;
+
+            let message = 0usize;
+            let source = *keypair.public();
+            let signature = Signer::new(keypair).sign(&message).expect("sign failed");
+
+            let payload = Payload::new(source, 0, 0usize, signature);
+
+            handle.broadcast(&payload).await.expect("broadcast failed");
+
+            // loop while waiting for batch_delay to expire
+            while !sender
+                .messages()
+                .await
+                .into_iter()
+                .any(|m| matches!(m.1, MurmurMessage::Announce(_, true)))
+            {}
+        }
+
+        #[tokio::test]
+        async fn disconnection() {
+            use drop::test::keyset;
+
+            drop::test::init_logger();
+
+            let mut murmur = Murmur::<usize, _>::default();
+            let keys = keyset(10).collect::<Vec<_>>();
+            let sampler = Arc::new(AllSampler::default());
+            let sender = Arc::new(CollectingSender::new(keys.iter().copied()));
+
+            murmur.setup(sampler.clone(), sender).await;
+
+            assert_eq!(murmur.gossip.read().await.len(), keys.len());
+
+            let sender = Arc::new(CollectingSender::new(keys.iter().skip(1).copied()));
+
+            murmur.disconnect(keys[0], sender, sampler).await;
+
+            let gossip = murmur.gossip.read().await;
+
+            assert!(
+                !gossip.contains(&keys[0]),
+                "gossip still contains disconnected peer"
+            );
+            assert_eq!(
+                gossip.len(),
+                keys.len() - 1,
+                "have too many peers after disconnected"
+            );
+        }
+
+        #[cfg(test)]
+        async fn garbage_test_helper(expiration_delay: u64) -> Murmur<u32, Fixed> {
+            let config = MurmurConfig {
+                batch_expiration: expiration_delay,
+                ..Default::default()
+            };
+            let murmur = Murmur::<u32, _>::new(KeyPair::random(), Fixed::new_local(), config);
+            let batch = generate_batch(10);
+
+            murmur.insert_batch(batch).await;
+
+            // yes this is ugly, blame the type inferer
+            <Murmur<_, _> as Processor<_, _, _, CollectingSender<MurmurMessage<u32>>>>::garbage_collection(
             &murmur,
         )
             .await;
 
-        murmur
-    }
+            murmur
+        }
 
-    #[tokio::test]
-    async fn garbage_collect() {
-        let murmur = garbage_test_helper(0).await;
+        #[tokio::test]
+        async fn garbage_collect() {
+            let murmur = garbage_test_helper(0).await;
 
-        assert!(
-            murmur.batches.read().await.is_empty(),
-            "garbage collection did not remove batch"
-        );
-    }
+            assert!(
+                murmur.batches.read().await.is_empty(),
+                "garbage collection did not remove batch"
+            );
+        }
 
-    #[tokio::test]
-    async fn garbage_collect_early() {
-        let murmur = garbage_test_helper(5).await;
+        #[tokio::test]
+        async fn garbage_collect_early() {
+            let murmur = garbage_test_helper(5).await;
 
-        assert!(
-            !murmur.batches.read().await.is_empty(),
-            "garbage collection removed batch too early"
-        );
+            assert!(
+                !murmur.batches.read().await.is_empty(),
+                "garbage collection removed batch too early"
+            );
+        }
     }
 }

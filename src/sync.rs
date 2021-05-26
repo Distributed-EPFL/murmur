@@ -205,54 +205,67 @@ pub mod test {
 
     use drop::crypto::sign::Signer;
 
-    fn generate_block(seq: Sequence, size: usize) -> Block<u32> {
-        let payloads = (0..size).map(|x| {
-            let mut signer = Signer::random();
-            let idx = x as u32;
-            let signature = signer.sign(&idx).expect("sign failed");
+    #[cfg(any(feature = "test", test))]
+    pub use utils::*;
 
-            Payload::new(*signer.public(), idx, idx, signature)
-        });
+    #[cfg(any(feature = "test", test))]
+    mod utils {
+        use super::*;
 
-        Block::new(seq, payloads)
-    }
+        fn generate_block(seq: Sequence, size: usize) -> Block<u32> {
+            let payloads = (0..size).map(|x| {
+                let mut signer = Signer::random();
+                let idx = x as u32;
+                let signature = signer.sign(&idx).expect("sign failed");
 
-    /// Generate a `Batch` for testing purposes
-    pub fn generate_batch(size: usize) -> Batch<u32> {
-        let blocks: BTreeMap<_, _> = (0..size as Sequence)
-            .map(|x| (x, generate_block(x, size)))
-            .collect();
-        let digest = hash(&blocks).expect("hash failed");
-        let size = size as u32;
-        let info = BatchInfo::new(size, digest);
+                Payload::new(*signer.public(), idx, idx, signature)
+            });
 
-        Batch::new(info, blocks.into_iter().map(|(_, block)| block))
-    }
-
-    #[tokio::test]
-    async fn correct_block_registration() {
-        static SIZE: usize = 50;
-
-        let batch = generate_batch(SIZE);
-        let state = BatchState::new(*batch.info());
-
-        for block in batch.blocks() {
-            state.insert(block.clone()).await.expect("insert failed");
+            Block::new(seq, payloads)
         }
 
-        state
-            .complete()
-            .await
-            .expect("batch not registered as complete");
+        /// Generate a `Batch` for testing purposes
+        pub fn generate_batch(size: usize) -> Batch<u32> {
+            let blocks: BTreeMap<_, _> = (0..size as Sequence)
+                .map(|x| (x, generate_block(x, size)))
+                .collect();
+            let digest = hash(&blocks).expect("hash failed");
+            let size = size as u32;
+            let info = BatchInfo::new(size, digest);
 
-        let expected: Vec<_> = batch.blocks().collect();
-        let guard = state.blocks().await;
+            Batch::new(info, blocks.into_iter().map(|(_, block)| block))
+        }
+    }
 
-        for i in 0..SIZE {
-            let actual = &guard[&(i as u32)];
-            let expected = expected[i];
+    #[cfg(test)]
+    mod tests {
+        use super::*;
 
-            assert_eq!(actual, expected);
+        #[tokio::test]
+        async fn correct_block_registration() {
+            static SIZE: usize = 50;
+
+            let batch = generate_batch(SIZE);
+            let state = BatchState::new(*batch.info());
+
+            for block in batch.blocks() {
+                state.insert(block.clone()).await.expect("insert failed");
+            }
+
+            state
+                .complete()
+                .await
+                .expect("batch not registered as complete");
+
+            let expected: Vec<_> = batch.blocks().collect();
+            let guard = state.blocks().await;
+
+            for i in 0..SIZE {
+                let actual = &guard[&(i as u32)];
+                let expected = expected[i];
+
+                assert_eq!(actual, expected);
+            }
         }
     }
 }
