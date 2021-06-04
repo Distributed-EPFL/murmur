@@ -573,7 +573,10 @@ where
         let gossip = self.gossip.clone();
         let to_sender = sender.clone();
 
+        let (deliver_tx, deliver_rx) = dispatch::channel(self.config.channel_cap);
+
         let batches = self.batches.clone();
+        let mut timeout_tx = deliver_tx.clone();
 
         task::spawn(async move {
             info!("started batch timeout monitoring");
@@ -586,12 +589,14 @@ where
                 if let Some(batch) = sponge.force().await {
                     debug!("force created a batch after failing to reach threshold");
 
+                    let batch = Arc::new(batch);
+
                     let info = *batch.info();
 
                     batches
                         .write()
                         .await
-                        .insert(*info.digest(), State::new_complete(batch));
+                        .insert(*info.digest(), State::new_complete(batch.clone()));
 
                     if let Err(e) = Self::announce_with_set(
                         info,
@@ -603,11 +608,14 @@ where
                     {
                         error!("failed to announce batch to peers: {}", e);
                     }
+
+;                    if timeout_tx.send(batch).await.is_err() {
+                        error!("all handle are dead, exiting timeout monitoring");
+                        break;
+                    }
                 }
             }
         });
-
-        let (deliver_tx, deliver_rx) = dispatch::channel(self.config.channel_cap);
 
         self.delivery.replace(deliver_tx);
 
@@ -771,8 +779,8 @@ impl<M> State<M>
 where
     M: Message + 'static,
 {
-    fn new_complete(batch: Batch<M>) -> Self {
-        Self::Complete(Arc::new(batch), Instant::now())
+    fn new_complete(batch: Arc<Batch<M>>) -> Self {
+        Self::Complete(batch, Instant::now())
     }
 
     fn is_complete(&self) -> bool {
@@ -1209,8 +1217,8 @@ pub mod test {
                 .for_each(|block| block.verify(&keypair).expect("invalid block"));
         }
 
-        #[tokio::test(flavor = "multi_thread")]
-        async fn local_batches_are_stored() {
+        #[tokio::test]
+        async fn local_batches_are_stored_and_delivered() {
             use drop::crypto::sign::Signer;
             use drop::test::keyset;
 
@@ -1248,6 +1256,8 @@ pub mod test {
 
             assert_eq!(block.len(), 1, "wrong batch length");
             assert_eq!(*block.iter().next().unwrap().payload(), MSG);
+
+            handle.deliver().await.expect("deliver failed");
         }
 
         #[tokio::test]
