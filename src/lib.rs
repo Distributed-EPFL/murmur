@@ -169,7 +169,7 @@ where
 /// [`Murmur`]: crate::::Murmur
 pub struct Murmur<M: Message, R: RdvPolicy> {
     keypair: KeyPair,
-    batches: RwLock<HashMap<Digest, State<M>>>,
+    batches: Arc<RwLock<HashMap<Digest, State<M>>>>,
 
     providers: ProviderHandle,
 
@@ -573,6 +573,8 @@ where
         let gossip = self.gossip.clone();
         let to_sender = sender.clone();
 
+        let batches = self.batches.clone();
+
         task::spawn(async move {
             info!("started batch timeout monitoring");
 
@@ -584,8 +586,15 @@ where
                 if let Some(batch) = sponge.force().await {
                     debug!("force created a batch after failing to reach threshold");
 
+                    let info = *batch.info();
+
+                    batches
+                        .write()
+                        .await
+                        .insert(*info.digest(), State::new_complete(batch));
+
                     if let Err(e) = Self::announce_with_set(
-                        *batch.info(),
+                        info,
                         true,
                         to_sender.clone(),
                         gossip.read().await.iter(),
@@ -762,6 +771,10 @@ impl<M> State<M>
 where
     M: Message + 'static,
 {
+    fn new_complete(batch: Batch<M>) -> Self {
+        Self::Complete(Arc::new(batch), Instant::now())
+    }
+
     fn is_complete(&self) -> bool {
         !self.is_pending()
     }
@@ -1194,6 +1207,47 @@ pub mod test {
 
             recv.blocks()
                 .for_each(|block| block.verify(&keypair).expect("invalid block"));
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn local_batches_are_stored() {
+            use drop::crypto::sign::Signer;
+            use drop::test::keyset;
+
+            drop::test::init_logger();
+
+            const MSG: usize = 0;
+
+            let keys = keyset(10);
+            let sender = CollectingSender::new(keys);
+            let mut murmur = Murmur::default();
+
+            murmur.config.batch_delay = 1;
+
+            let mut handle = murmur
+                .setup(Arc::new(AllSampler::default()), Arc::new(sender))
+                .await;
+
+            let mut signer = Signer::random();
+            let signature = signer.sign(&MSG).expect("sign failed");
+            let payload = Payload::new(*signer.public(), 0, MSG, signature);
+
+            handle.broadcast(&payload).await.expect("broadcast failed");
+
+            while murmur.batches.read().await.is_empty() {}
+
+            let batches = murmur.batches.read().await;
+
+            assert_eq!(batches.len(), 1, "wrong number of batches registered");
+
+            let batch = batches.values().next().unwrap();
+
+            assert!(batch.is_complete(), "incomplete batch after timeout");
+
+            let block = batch.get_block(0).await.unwrap();
+
+            assert_eq!(block.len(), 1, "wrong batch length");
+            assert_eq!(*block.iter().next().unwrap().payload(), MSG);
         }
 
         #[tokio::test]
