@@ -168,7 +168,6 @@ where
 ///
 /// [`Murmur`]: crate::::Murmur
 pub struct Murmur<M: Message, R: RdvPolicy> {
-    keypair: KeyPair,
     batches: Arc<RwLock<HashMap<Digest, State<M>>>>,
 
     providers: ProviderHandle,
@@ -189,9 +188,8 @@ where
     R: RdvPolicy,
 {
     /// Create a new `Murmur` instance
-    pub fn new(keypair: KeyPair, rendezvous: R, config: MurmurConfig) -> Self {
+    pub fn new(rendezvous: R, config: MurmurConfig) -> Self {
         Self {
-            keypair,
             config,
             rendezvous: Arc::new(rendezvous),
             batches: Default::default(),
@@ -449,7 +447,7 @@ where
 
                 self.providers.register_response(blockid, from).await;
 
-                block.verify(&self.keypair).context(InvalidBlock { from })?;
+                block.verify().context(InvalidBlock { from })?;
 
                 debug!(
                     "received valid block {} for batch {} from {}",
@@ -485,9 +483,7 @@ where
             }
 
             MurmurMessage::Collect(payload) => {
-                payload
-                    .verify(&self.keypair)
-                    .context(InvalidBlock { from })?;
+                payload.verify().context(InvalidBlock { from })?;
 
                 if let Some(batch) = self.sponge.collect(payload).await {
                     let info = *batch.info();
@@ -607,9 +603,8 @@ where
                     .await
                     {
                         error!("failed to announce batch to peers: {}", e);
-                    }
-
-;                    if timeout_tx.send(batch).await.is_err() {
+                    };
+                    if timeout_tx.send(batch).await.is_err() {
                         error!("all handle are dead, exiting timeout monitoring");
                         break;
                     }
@@ -660,11 +655,7 @@ where
     M: Message + 'static,
 {
     fn default() -> Self {
-        Self::new(
-            KeyPair::random(),
-            Fixed::new_local(),
-            MurmurConfig::default(),
-        )
+        Self::new(Fixed::new_local(), MurmurConfig::default())
     }
 }
 
@@ -920,14 +911,12 @@ pub mod test {
             M: Message,
             F: Fn(usize) -> M,
         {
-            use drop::crypto::sign::Signer;
-
             generate_sequence(count, move |x| {
-                let mut signer = Signer::random();
-                let source = *signer.public();
+                let keypair = KeyPair::random();
+                let source = keypair.public();
 
                 let content = (generator)(x);
-                let signature = signer.sign(&content).expect("sign failed");
+                let signature = keypair.sign(&content).expect("sign failed");
 
                 let payload = Payload::new(source, x as Sequence, content, signature);
 
@@ -1036,7 +1025,7 @@ pub mod test {
                 batch_delay: 200 * 1000,
                 ..Default::default()
             };
-            let murmur = Murmur::new(KeyPair::random(), Fixed::new_local(), config);
+            let murmur = Murmur::new(Fixed::new_local(), config);
             let peers = keyset(50);
             let payloads = generate_collect(config.sponge_threshold + 1, |x| x * 2);
 
@@ -1197,7 +1186,6 @@ pub mod test {
 
             drop::test::init_logger();
 
-            let keypair = KeyPair::random();
             let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
             let info = *batch.info();
             let murmur = Murmur::default();
@@ -1214,12 +1202,11 @@ pub mod test {
             assert_eq!(recv.info(), &info, "delivered batch has different metadata");
 
             recv.blocks()
-                .for_each(|block| block.verify(&keypair).expect("invalid block"));
+                .for_each(|block| block.verify().expect("invalid block"));
         }
 
         #[tokio::test]
         async fn local_batches_are_stored_and_delivered() {
-            use drop::crypto::sign::Signer;
             use drop::test::keyset;
 
             drop::test::init_logger();
@@ -1236,9 +1223,9 @@ pub mod test {
                 .setup(Arc::new(AllSampler::default()), Arc::new(sender))
                 .await;
 
-            let mut signer = Signer::random();
+            let signer = KeyPair::random();
             let signature = signer.sign(&MSG).expect("sign failed");
-            let payload = Payload::new(*signer.public(), 0, MSG, signature);
+            let payload = Payload::new(signer.public(), 0, MSG, signature);
 
             handle.broadcast(&payload).await.expect("broadcast failed");
 
@@ -1310,7 +1297,6 @@ pub mod test {
 
         #[tokio::test]
         async fn broadcast_eventually_announces() {
-            use drop::crypto::sign::Signer;
             use drop::test::keyset;
 
             const PEERS: usize = 10;
@@ -1324,15 +1310,15 @@ pub mod test {
             };
 
             let keys = keyset(PEERS);
-            let mut murmur = Murmur::new(keypair.clone(), Fixed::new_local(), config);
+            let mut murmur = Murmur::new(Fixed::new_local(), config);
             let sampler = Arc::new(AllSampler::default());
             let sender = Arc::new(CollectingSender::new(keys));
 
             let mut handle = murmur.setup(sampler, sender.clone()).await;
 
             let message = 0usize;
-            let source = *keypair.public();
-            let signature = Signer::new(keypair).sign(&message).expect("sign failed");
+            let source = keypair.public();
+            let signature = keypair.sign(&message).expect("sign failed");
 
             let payload = Payload::new(source, 0, 0usize, signature);
 
@@ -1385,15 +1371,15 @@ pub mod test {
                 batch_expiration: expiration_delay,
                 ..Default::default()
             };
-            let murmur = Murmur::<u32, _>::new(KeyPair::random(), Fixed::new_local(), config);
+            let murmur = Murmur::<u32, _>::new(Fixed::new_local(), config);
             let batch = generate_batch(10);
 
             murmur.insert_batch(batch).await;
 
             // yes this is ugly, blame the type inferer
             <Murmur<_, _> as Processor<_, _, _, CollectingSender<MurmurMessage<u32>>>>::garbage_collection(
-            &murmur,
-        )
+                &murmur,
+            )
             .await;
 
             murmur

@@ -5,7 +5,7 @@ use std::iter::{self, FromIterator};
 use std::mem;
 
 use drop::crypto::hash::Digest;
-use drop::crypto::sign::{self, KeyPair, Signature, Signer, VerifyError};
+use drop::crypto::sign::{self, Signature, VerifyError};
 use drop::system::{message, Message};
 
 use serde::{Deserialize, Serialize};
@@ -251,10 +251,10 @@ impl<M: Message> Block<M> {
 
     /// Verify all `Payload`s in this `Block`. This either returns `Ok` if all payloads are correct,
     /// or the first `Err` encountered while verifying payloads.
-    pub fn verify(&self, keypair: &KeyPair) -> Result<(), VerifyError> {
+    pub fn verify(&self) -> Result<(), VerifyError> {
         self.payloads
             .iter()
-            .find_map(|p| p.verify(keypair).err())
+            .find_map(|p| p.verify().err())
             .map(Err)
             .unwrap_or(Ok(()))
     }
@@ -372,8 +372,8 @@ impl<M> Payload<M> {
 
 impl<M: Message> Payload<M> {
     /// Verify the `Signature` of this `Payload`
-    pub fn verify(&self, keypair: &KeyPair) -> Result<(), VerifyError> {
-        Signer::new(keypair.clone()).verify(&self.signature, &self.sender, &self.payload)
+    pub fn verify(&self) -> Result<(), VerifyError> {
+        self.signature.verify(&self.payload, &self.sender)
     }
 }
 
