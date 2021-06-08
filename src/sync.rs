@@ -203,8 +203,6 @@ pub mod test {
     use super::super::{Batch, Payload};
     use super::*;
 
-    use drop::crypto::sign::Signer;
-
     #[cfg(any(feature = "test", test))]
     pub use utils::*;
 
@@ -212,13 +210,15 @@ pub mod test {
     mod utils {
         use super::*;
 
+        use drop::crypto::sign::KeyPair;
+
         fn generate_block(seq: Sequence, size: usize) -> Block<u32> {
             let payloads = (0..size).map(|x| {
-                let mut signer = Signer::random();
+                let signer = KeyPair::random();
                 let idx = x as u32;
                 let signature = signer.sign(&idx).expect("sign failed");
 
-                Payload::new(*signer.public(), idx, idx, signature)
+                Payload::new(signer.public(), idx, idx, signature)
             });
 
             Block::new(seq, payloads)
