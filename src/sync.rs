@@ -225,9 +225,9 @@ pub mod test {
         }
 
         /// Generate a `Batch` for testing purposes
-        pub fn generate_batch(size: usize) -> Batch<u32> {
+        pub fn generate_batch(size: usize, block_size: usize) -> Batch<u32> {
             let blocks: BTreeMap<_, _> = (0..size as Sequence)
-                .map(|x| (x, generate_block(x, size)))
+                .map(|x| (x, generate_block(x, block_size)))
                 .collect();
             let digest = hash(&blocks).expect("hash failed");
             let size = size as u32;
@@ -245,7 +245,7 @@ pub mod test {
         async fn correct_block_registration() {
             static SIZE: usize = 50;
 
-            let batch = generate_batch(SIZE);
+            let batch = generate_batch(SIZE, 1);
             let state = BatchState::new(*batch.info());
 
             for block in batch.blocks() {

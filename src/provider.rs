@@ -287,7 +287,7 @@ mod test {
         keys: impl Iterator<Item = &PublicKey>,
         handle: &ProviderHandle,
     ) -> BlockId {
-        let batch = generate_batch(1);
+        let batch = generate_batch(1, 10);
         let blockid = BlockId::new(*batch.info().digest(), 0);
 
         for key in keys {
