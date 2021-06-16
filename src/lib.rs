@@ -389,7 +389,7 @@ where
         match message {
             MurmurMessage::Announce(info, has) => {
                 if has {
-                    self.pull_missing_blocks(info, 0..info.sequence(), from, sender)
+                    self.pull_missing_blocks(info, 0..info.block_count(), from, sender)
                         .await?;
                 }
             }
@@ -1092,7 +1092,7 @@ pub mod test {
             let (_, sender) = run(murmur, messages, keys).await;
             let messages = sender.messages().await;
 
-            for blockid in (0..info.sequence()).map(|seq| BlockId::new(*info.digest(), seq)) {
+            for blockid in (0..info.block_count()).map(|seq| BlockId::new(*info.digest(), seq)) {
                 let pulls = messages
                     .iter()
                     .filter(|msg| matches!(msg.1, MurmurMessage::Pull(id) if blockid == id))

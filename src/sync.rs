@@ -75,7 +75,7 @@ impl<M: Message + 'static> BatchState<M> {
     /// for the inserted `Block` if the insert is successful. <br />
     /// It should be checked before inserting that the `Block` is valid.
     pub async fn insert(&self, block: Block<M>) -> Result<(), BlockError> {
-        ensure!(block.sequence() < self.info.sequence(), OutOfBounds);
+        ensure!(block.sequence() < self.info.block_count(), OutOfBounds);
 
         match *self.state.write().await {
             State::Pending(ref mut blocks) => {
@@ -126,7 +126,7 @@ impl<M: Message + 'static> BatchState<M> {
     pub async fn complete(&self) -> Result<(), BlockError> {
         let blocks = {
             let mut blocks = self.blocks_mut().await?;
-            let have_blocks = blocks.keys().count() == self.info.size();
+            let have_blocks = blocks.len() == self.info.block_count() as usize;
 
             ensure!(have_blocks, Missing);
 
@@ -230,8 +230,8 @@ pub mod test {
                 .map(|x| (x, generate_block(x, block_size)))
                 .collect();
             let digest = hash(&blocks).expect("hash failed");
-            let size = size as u32;
-            let info = BatchInfo::new(size, digest);
+            let payload_count = (size * block_size) as Sequence;
+            let info = BatchInfo::new(size, payload_count, digest);
 
             Batch::new(info, blocks.into_iter().map(|(_, block)| block))
         }
