@@ -1007,13 +1007,8 @@ pub mod test {
     mod tests {
         use super::*;
 
-        use lazy_static::lazy_static;
-
-        lazy_static! {
-            static ref SIZE: usize = MurmurConfig::default().block_size * 10;
-            static ref DEFAULT_SPONGE_THRESHOLD: usize = MurmurConfig::default().sponge_threshold;
-            static ref DEFAULT_BLOCK_SIZE: usize = MurmurConfig::default().block_size;
-        }
+        static SIZE: usize = 10;
+        static DEFAULT_BLOCK_SIZE: usize = 256;
 
         #[tokio::test(flavor = "multi_thread")]
         async fn sponge_fill() {
@@ -1050,11 +1045,11 @@ pub mod test {
 
             drop::test::init_logger();
 
-            let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
+            let batch = generate_batch(SIZE, DEFAULT_BLOCK_SIZE);
             let info = *batch.info();
             let announce = MurmurMessage::Announce(*batch.info(), true);
             let messages = iter::once(announce).chain(generate_transmit(batch));
-            let keys: Vec<_> = keyset(*SIZE / 100).collect();
+            let keys: Vec<_> = keyset(SIZE).collect();
             let murmur = Murmur::default();
 
             let (murmur, sender) = run(murmur, messages, keys).await;
@@ -1081,9 +1076,9 @@ pub mod test {
 
             drop::test::init_logger();
 
-            let peer_count = *SIZE / 100;
+            let peer_count = SIZE;
 
-            let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
+            let batch = generate_batch(SIZE, DEFAULT_BLOCK_SIZE);
             let info = *batch.info();
             let announce = MurmurMessage::Announce(*batch.info(), true);
             let messages = iter::repeat(announce.clone())
@@ -1120,11 +1115,11 @@ pub mod test {
 
             drop::test::init_logger();
 
-            let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
+            let batch = generate_batch(SIZE, DEFAULT_BLOCK_SIZE);
             let info = *batch.info();
             let pulls = generate_pull(&batch);
             let murmur = Murmur::default();
-            let keys: Vec<_> = keyset(*SIZE / 100).collect();
+            let keys: Vec<_> = keyset(SIZE).collect();
 
             murmur.insert_batch(batch.clone()).await;
 
@@ -1148,7 +1143,7 @@ pub mod test {
             static SUBSCRIBERS: usize = 10;
             drop::test::init_logger();
 
-            let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
+            let batch = generate_batch(SIZE, DEFAULT_BLOCK_SIZE);
             let murmur = Murmur::default();
             let keys: Vec<_> = keyset(50).collect();
 
@@ -1186,7 +1181,7 @@ pub mod test {
 
             drop::test::init_logger();
 
-            let batch = generate_batch(*SIZE / *DEFAULT_BLOCK_SIZE);
+            let batch = generate_batch(SIZE, DEFAULT_BLOCK_SIZE);
             let info = *batch.info();
             let murmur = Murmur::default();
             let keys: Vec<_> = keyset(50).collect();
@@ -1256,10 +1251,10 @@ pub mod test {
 
             drop::test::init_logger();
 
-            let keys: Vec<_> = keyset(*SIZE).collect();
+            let keys: Vec<_> = keyset(SIZE).collect();
             let sender = Arc::new(CollectingSender::new(keys.iter().copied()));
             let sampler = Arc::new(AllSampler::default());
-            let batch = generate_batch(1);
+            let batch = generate_batch(1, 100);
             let mut murmur = Murmur::default();
             let announce = MurmurMessage::Announce(*batch.info(), true);
             let messages = iter::once(announce.clone())
@@ -1372,7 +1367,7 @@ pub mod test {
                 ..Default::default()
             };
             let murmur = Murmur::<u32, _>::new(Fixed::new_local(), config);
-            let batch = generate_batch(10);
+            let batch = generate_batch(SIZE, DEFAULT_BLOCK_SIZE);
 
             murmur.insert_batch(batch).await;
 
