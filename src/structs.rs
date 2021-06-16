@@ -57,14 +57,24 @@ impl fmt::Display for BlockId {
 #[message]
 #[derive(Copy, Eq, PartialEq, Hash)]
 pub struct BatchInfo {
+    block_count: usize,
     size: Sequence,
     digest: Digest,
 }
 
 impl BatchInfo {
     /// Create a new `BatchInfo` from a size and a digest
-    pub fn new(size: Sequence, digest: Digest) -> Self {
-        Self { size, digest }
+    pub fn new(block_count: usize, size: Sequence, digest: Digest) -> Self {
+        Self {
+            block_count,
+            size,
+            digest,
+        }
+    }
+
+    /// Get the number of block in this `Batch`
+    pub fn block_count(&self) -> Sequence {
+        self.block_count as Sequence
     }
 
     /// Get the sequence of this `Block` inside its `Batch`
@@ -201,7 +211,7 @@ where
             .collect();
         let len = blocks.values().fold(0, |acc, b| acc + b.len());
         let digest = hash(&blocks).expect("hashing failed");
-        let info = BatchInfo::new(len, digest);
+        let info = BatchInfo::new(blocks.len(), len, digest);
 
         // FIXME: this would be better using `BTreeMap::into_values`
         Self::new(info, blocks.values().cloned())

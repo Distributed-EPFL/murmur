@@ -356,7 +356,7 @@ mod test {
         let handle = ProviderHandle::default();
         let keys: Vec<_> = keyset(10).collect();
         let id = fill_handle(keys.iter(), &handle).await;
-        let info = BatchInfo::new(1, *id.digest());
+        let info = BatchInfo::new(1, 1, *id.digest());
 
         assert!(handle.purge(info).await);
 
