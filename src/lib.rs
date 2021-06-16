@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 use drop::async_trait;
 use drop::crypto::hash::Digest;
 use drop::crypto::key::exchange::PublicKey;
-use drop::crypto::sign::{KeyPair, SignError, VerifyError};
+use drop::crypto::sign::{SignError, VerifyError};
 use drop::system::{message, Handle, Message, Processor, Sampler, Sender, SenderError};
 
 use futures::future::OptionFuture;
@@ -879,8 +879,8 @@ pub mod test {
 
     use std::iter;
 
-    use drop::system::AllSampler;
-    use drop::system::CollectingSender;
+    use drop::crypto::sign::KeyPair;
+    use drop::system::{AllSampler, CollectingSender};
 
     pub use super::sync::test::*;
 
@@ -1085,7 +1085,9 @@ pub mod test {
                 .take(peer_count)
                 .chain(generate_transmit(batch));
             let keys: Vec<_> = keyset(peer_count).collect();
-            let murmur = Murmur::default();
+            let mut murmur = Murmur::default();
+
+            murmur.config.timeout = 60;
 
             let (_, sender) = run(murmur, messages, keys).await;
             let messages = sender.messages().await;
