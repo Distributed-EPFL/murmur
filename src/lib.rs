@@ -200,7 +200,7 @@ where
                 config.block_size,
             ),
             delivery: Default::default(),
-            providers: Default::default(),
+            providers: ProviderHandle::new(config.channel_cap, config.timeout()),
         }
     }
 
@@ -1085,9 +1085,12 @@ pub mod test {
                 .take(peer_count)
                 .chain(generate_transmit(batch));
             let keys: Vec<_> = keyset(peer_count).collect();
-            let mut murmur = Murmur::default();
-
-            murmur.config.timeout = 60;
+            let config = MurmurConfigBuilder::default()
+                .timeout(60)
+                .murmur_gossip_size(peer_count)
+                .build()
+                .unwrap();
+            let murmur = Murmur::new(Fixed::new_local(), config);
 
             let (_, sender) = run(murmur, messages, keys).await;
             let messages = sender.messages().await;
