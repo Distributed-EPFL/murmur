@@ -4,11 +4,12 @@ version = "0.1.0"
 authors = ["Ogier Bouvier <ars3nic@ars3nic.ch>"]
 edition = "2018"
 license = "AGPL-3"
+resolver = "2"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-drop = { git = "https://github.com/Distributed-EPFL/drop", features = [ "system" ] }
+drop = { git = "https://github.com/Distributed-EPFL/drop" }
 tokio = { version = "1", features = [ "sync", "time" ] }
 snafu = "0.6"
 serde = "1.0"
@@ -29,4 +30,5 @@ tokio = { version = "1", features = [ "rt-multi-thread", "macros" ] }
 [features]
 default = []
 cli = [ "structopt" ]
+system = [ "drop/system" ]
 test = [ "drop/test", "lazy_static" ]

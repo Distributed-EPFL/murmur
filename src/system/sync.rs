@@ -7,7 +7,7 @@ use std::ops::DerefMut;
 use super::{Batch, BatchInfo, Block, Sequence};
 
 use drop::crypto::hash::{hash, HashError};
-use drop::system::Message;
+use drop::Message;
 
 use snafu::{ensure, Backtrace, ResultExt, Snafu};
 
