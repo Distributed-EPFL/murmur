@@ -1,13 +1,19 @@
-use std::cmp::Ordering;
-use std::collections::BTreeMap;
-use std::fmt;
-use std::iter::{self, FromIterator};
-use std::mem;
+use std::{
+    cmp::Ordering,
+    collections::BTreeMap,
+    fmt,
+    iter::{self, FromIterator},
+    mem,
+};
 
-use drop::crypto::hash::Digest;
-use drop::crypto::sign::{self, Signature, VerifyError};
-use drop::system::{message, Message};
-
+use drop::{
+    crypto::{
+        hash::Digest,
+        sign::{self, Signature, VerifyError},
+    },
+    message,
+    Message,
+};
 use serde::{Deserialize, Serialize};
 
 pub(crate) type Sequence = u32;
