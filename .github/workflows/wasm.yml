@@ -1,0 +1,25 @@
+on: [push, pull_request]
+
+name: wasm build
+
+jobs:
+  wasm:
+    name: wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - uses: actions-rs/toolchain@v1
+        name: install toolchain
+        with:
+          profile: minimal
+          toolchain: stable
+          target: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v1
+
+      - uses: actions-rs/cargo@v1
+        name: build for wasm
+        with:
+          command: build
+          args: --target wasm32-unknown-unknown
