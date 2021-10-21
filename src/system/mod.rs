@@ -631,7 +631,7 @@ where
 
             gossip.remove(&peer);
 
-            let not_in_gossip = keys.into_iter().filter(|x| !gossip.contains(&x));
+            let not_in_gossip = keys.into_iter().filter(|x| !gossip.contains(x));
 
             // if the sampler fails we already have all known peers in our gossip set
             if let Ok(new) = sampler.sample(not_in_gossip, 1).await {

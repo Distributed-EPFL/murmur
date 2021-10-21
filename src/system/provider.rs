@@ -1,18 +1,18 @@
-use super::{BatchInfo, BlockId};
-
-use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt;
-use std::sync::Arc;
-
-use std::time::{Duration, Instant};
+use std::{
+    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
+    fmt,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use drop::crypto::key::exchange::PublicKey;
-
-use tokio::sync::{mpsc, oneshot};
-use tokio::task::{self, JoinHandle};
-
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::{self, JoinHandle},
+};
 use tracing::trace;
+
+use super::{BatchInfo, BlockId};
 
 /// An agent handle used for tracking latency information about remote peers
 #[derive(Clone)]
@@ -145,7 +145,7 @@ impl ProviderAgent {
 
     fn get_best_for(&self, id: &BlockId) -> Option<PublicKey> {
         self.providers
-            .get(&id)
+            .get(id)
             .map(|providers| {
                 self.latencies
                     .iter()
@@ -278,10 +278,9 @@ impl From<PublicKey> for Provider {
 
 #[cfg(test)]
 mod test {
-    use super::super::test::generate_batch;
-    use super::*;
-
     use drop::test::keyset;
+
+    use super::{super::test::generate_batch, *};
 
     async fn fill_handle(
         keys: impl Iterator<Item = &PublicKey>,
