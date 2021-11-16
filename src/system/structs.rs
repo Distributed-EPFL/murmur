@@ -11,15 +11,14 @@ use drop::{
         hash::Digest,
         sign::{self, Signature, VerifyError},
     },
-    message,
-    Message,
+    message, Message,
 };
 use serde::{Deserialize, Serialize};
 
 pub(crate) type Sequence = u32;
 
 #[message]
-#[derive(Copy, PartialEq, Eq, Hash)]
+#[derive(Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 /// A structure that uniquely identifies a `Block`
 pub struct BlockId {
     digest: Digest,
@@ -37,19 +36,6 @@ impl BlockId {
 
     pub fn sequence(&self) -> Sequence {
         self.sequence
-    }
-}
-
-impl PartialOrd for BlockId {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.sequence.partial_cmp(&other.sequence)
-    }
-}
-
-impl Ord for BlockId {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // FIXME: once drop has `Ord` `Digest`
-        self.partial_cmp(other).unwrap()
     }
 }
 
@@ -450,5 +436,23 @@ where
 impl<M: Message> Default for Sponge<M> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn block_id_with_different_digests_arent_equals() {
+        use std::cmp::Ordering;
+
+        use drop::crypto::hash::SIZE;
+
+        let first_id = BlockId::new(Digest::from([0u8; SIZE]), 0);
+        let second_id = BlockId::new(Digest::from([1u8; SIZE]), 0);
+
+        assert_ne!(first_id, second_id);
+        assert_ne!(first_id.cmp(&second_id), Ordering::Equal);
     }
 }
